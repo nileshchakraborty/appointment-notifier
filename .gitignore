@@ -10,6 +10,7 @@
 *.db
 media-cache/
 ocr-cache/
+*.image
 openwa/node_modules/
 openwa/sessions/
 __pycache__/

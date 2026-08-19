@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from appointment_notifier.media import PortalMediaAnalyzer
+from appointment_notifier.telegram_watcher import _select_media_dir
 
 
 def test_portal_layout_detects_bookable_screenshot(tmp_path, monkeypatch):
@@ -29,3 +30,10 @@ def test_portal_layout_rejects_ghost_screenshot(tmp_path, monkeypatch):
     )
 
     assert PortalMediaAnalyzer().analyze(image).portal_state == "ghost_or_unbookable"
+
+
+def test_media_staging_selects_first_writable_candidate(tmp_path):
+    first = tmp_path / "drive1"
+    second = tmp_path / "drive2"
+
+    assert _select_media_dir((first, second)) == first
