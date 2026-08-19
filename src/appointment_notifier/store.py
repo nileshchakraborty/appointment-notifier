@@ -7,6 +7,7 @@ from typing import Any
 from pathlib import Path
 
 from .models import Alert, SlotSignal, TelegramMessage
+from .parser import VisaSlotParser
 
 
 class AlertStore:
@@ -153,7 +154,15 @@ class AlertStore:
             params = (first_matched_at,)
         legacy_query += " order by sent_at"
         legacy = self.conn.execute(legacy_query, params).fetchall()
-        combined = [dict(row) for row in legacy] + [dict(row) for row in observed]
+        legacy_parser = VisaSlotParser()
+        legacy_rows = []
+        for row in legacy:
+            item = dict(row)
+            signal = legacy_parser.parse(str(item.get("text") or ""), has_image=False)
+            if signal.matched:
+                item["category"] = signal.category
+            legacy_rows.append(item)
+        combined = legacy_rows + [dict(row) for row in observed]
         combined.sort(key=lambda row: str(row.get("sent_at") or ""))
         if observed and legacy:
             source = "classified observations with legacy baseline"

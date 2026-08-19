@@ -81,6 +81,18 @@ def test_observations_extend_legacy_baseline(tmp_path) -> None:
     assert source == "classified observations with legacy baseline"
 
 
+def test_legacy_bulk_alerts_are_backclassified(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    store.conn.execute(
+        "insert into alerts (digest, message_id, title, body, sent_at) values (?, ?, ?, ?, ?)",
+        ("legacy-bulk", 1, "slot", "JULY AUGUST BULK APPOINTMENTS OPENED", "2026-07-01T00:00:00+00:00"),
+    )
+
+    rows, _ = store.trend_points()
+
+    assert rows[0]["category"] == "bulk_release"
+
+
 def test_reclassifies_pre_category_observations(tmp_path) -> None:
     store = AlertStore(tmp_path / "state.sqlite3")
     store.record_observation(
