@@ -99,3 +99,6 @@ Media staging is capacity-aware and configured through `MEDIA_TEMP_DIRS`. The
 default order is Drive 1, Drive 2, then `/tmp`; each candidate must be writable
 and have at least 8 MB free. If no candidate is available, the message remains
 `unknown_image` and the notifier does not risk filling local storage.
+
+The host-side media directory is supplied through the ignored `MEDIA_HOST_DIR`
+environment variable and is never committed to the repository.

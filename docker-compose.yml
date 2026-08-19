@@ -61,7 +61,7 @@ services:
     volumes:
       - ./.state:/app/.state
       - ./.secrets:/run/secrets:ro
-      - /mnt/drive2/appointment-notifier-media:/mnt/drive2/appointment-notifier-media
+      - ${MEDIA_HOST_DIR:?MEDIA_HOST_DIR is required}:/mnt/drive2/appointment-notifier-media
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     mem_limit: 256m
