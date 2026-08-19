@@ -94,3 +94,8 @@ the SQLite `media_analysis` table. This prevents repeated OCR for the same image
 and lets `/trend` and `/ask` receive a compact cached OCR evidence summary rather
 than reprocessing Telegram history or sending raw images to the LLM. Raw media is
 not persisted by the notifier.
+
+Media staging is capacity-aware and configured through `MEDIA_TEMP_DIRS`. The
+default order is Drive 1, Drive 2, then `/tmp`; each candidate must be writable
+and have at least 8 MB free. If no candidate is available, the message remains
+`unknown_image` and the notifier does not risk filling local storage.

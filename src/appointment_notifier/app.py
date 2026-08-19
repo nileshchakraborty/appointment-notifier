@@ -78,6 +78,7 @@ class AppointmentNotifierApp:
             api_hash=self.settings.telegram.api_hash,
             session_path=str(self.settings.telegram.session_path),
             channel=self.settings.telegram.channel,
+            media_dirs=self.settings.media_temp_dirs,
         )
         llm_client = build_llm_client(self.settings.trend)
         trend_service = TrendService(self.store, self.settings.trend, llm_client)

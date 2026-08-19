@@ -117,6 +117,7 @@ class AppSettings:
     log_level: str
     required_terms: tuple[str, ...]
     suppress_terms: tuple[str, ...]
+    media_temp_dirs: tuple[Path, ...]
 
 
 def load_settings(require_telegram: bool = True) -> AppSettings:
@@ -211,4 +212,8 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         required_terms=_csv("REQUIRED_TERMS"),
         suppress_terms=_csv("SUPPRESS_TERMS"),
+        media_temp_dirs=tuple(
+            Path(value)
+            for value in (_csv("MEDIA_TEMP_DIRS") or ("/mnt/drive1/appointment-notifier-media", "/mnt/drive2/appointment-notifier-media", "/tmp/appointment-notifier-media"))
+        ),
     )
