@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class MediaAnalysis:
     sha256: str
@@ -20,7 +23,13 @@ class PortalMediaAnalyzer:
 
     def analyze(self, path: str | Path) -> MediaAnalysis:
         image_path = Path(path)
-        digest = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        try:
+            image_bytes = image_path.read_bytes()
+        except OSError:
+            return MediaAnalysis("", "", {}, "unknown")
+        if len(image_bytes) > MAX_IMAGE_BYTES:
+            return MediaAnalysis("", "", {"rejected": "image_too_large"}, "unknown")
+        digest = hashlib.sha256(image_bytes).hexdigest()
         text = self._ocr(image_path)
         normalized = " ".join(text.lower().split())
         has_calendar = bool(re.search(r"\b(?:calendar|schedule|select\s+date|\d{1,2}/\d{1,2}/\d{4})\b", normalized))

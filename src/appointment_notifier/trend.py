@@ -27,6 +27,8 @@ class TrendReport:
     matching_posts: int
     bulk_release_posts: int
     individual_availability_posts: int
+    last_bulk_release: str | None
+    last_individual_availability: str | None
     legacy_posts: int
     unbookable_posts: int
     na_heartbeat_posts: int
@@ -74,6 +76,8 @@ class TrendAnalyzer:
                 matching_posts=0,
                 bulk_release_posts=0,
                 individual_availability_posts=0,
+                last_bulk_release=None,
+                last_individual_availability=None,
                 legacy_posts=0,
                 unbookable_posts=int((summary or {}).get("unbookable", 0)),
                 na_heartbeat_posts=int((summary or {}).get("na_heartbeat", 0)),
@@ -96,6 +100,12 @@ class TrendAnalyzer:
         categories = [str(row.get("category") or "unknown") for row in rows if _parse_datetime(str(row.get("sent_at") or "")) is not None]
         bulk_posts = sum(category == "bulk_release" for category in categories)
         individual_posts = sum(category == "individual_availability" for category in categories)
+        dated_rows = [
+            (_parse_datetime(str(row.get("sent_at") or "")), str(row.get("category") or ""))
+            for row in rows
+        ]
+        last_bulk = max((point for point, category in dated_rows if point and category == "bulk_release"), default=None)
+        last_individual = max((point for point, category in dated_rows if point and category == "individual_availability"), default=None)
         legacy_posts = sum(category == "legacy" for category in categories)
         ocr_evidence = tuple(
             text[:280].replace("\n", " ")
@@ -149,6 +159,8 @@ class TrendAnalyzer:
             matching_posts=len(points),
             bulk_release_posts=bulk_posts,
             individual_availability_posts=individual_posts,
+            last_bulk_release=last_bulk.astimezone(self.local_tz).isoformat(timespec="minutes") if last_bulk else None,
+            last_individual_availability=last_individual.astimezone(self.local_tz).isoformat(timespec="minutes") if last_individual else None,
             legacy_posts=legacy_posts,
             unbookable_posts=int((summary or {}).get("unbookable", 0)),
             na_heartbeat_posts=int((summary or {}).get("na_heartbeat", 0)),
@@ -219,6 +231,10 @@ def format_report(report: TrendReport) -> str:
         f"Excluded: {report.unbookable_posts} invalid/unbookable; {report.na_heartbeat_posts} NA heartbeats; {report.unknown_image_posts} unclassified images",
         f"Range: {report.first_post} to {report.last_post}",
     ]
+    if report.last_bulk_release:
+        lines.append(f"Last bulk release post: {report.last_bulk_release}")
+    if report.last_individual_availability:
+        lines.append(f"Last individual availability post: {report.last_individual_availability}")
     if report.events_per_week is not None and report.median_gap_days is not None:
         lines.append(f"Frequency: {report.events_per_week:g} events/week; median gap {report.median_gap_days:g} days")
     elif report.events_per_week is not None:

@@ -57,7 +57,7 @@ class TelegramWatcher:
                 try:
                     downloaded = await client.download_media(message, file=path)
                     path = str(downloaded) if downloaded else None
-                except (OSError, RuntimeError) as exc:
+                except Exception as exc:
                     LOGGER.warning("Unable to download Telegram image %s: %s", message.id, exc)
                     path = None
         try:

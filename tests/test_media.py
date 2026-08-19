@@ -37,3 +37,21 @@ def test_media_staging_selects_first_writable_candidate(tmp_path):
     second = tmp_path / "drive2"
 
     assert _select_media_dir((first, second)) == first
+
+
+def test_oversized_media_is_rejected_before_ocr(tmp_path, monkeypatch):
+    image = tmp_path / "large.png"
+    image.write_bytes(b"x" * (25 * 1024 * 1024 + 1))
+    called = False
+
+    def fail_ocr(path):
+        nonlocal called
+        called = True
+        raise AssertionError("OCR should not run for oversized media")
+
+    monkeypatch.setattr(PortalMediaAnalyzer, "_ocr", staticmethod(fail_ocr))
+    result = PortalMediaAnalyzer().analyze(image)
+
+    assert result.portal_state == "unknown"
+    assert result.features["rejected"] == "image_too_large"
+    assert called is False

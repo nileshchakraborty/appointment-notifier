@@ -6,7 +6,7 @@ import pytest
 
 from appointment_notifier.config import WhatsAppSettings
 from appointment_notifier.models import Alert
-from appointment_notifier.notifiers import OpenWaWhatsAppNotifier, _format_openwa_chat_id
+from appointment_notifier.notifiers import CompositeNotifier, Notifier, OpenWaWhatsAppNotifier, _format_openwa_chat_id
 
 
 def _settings(**overrides) -> WhatsAppSettings:
@@ -76,3 +76,21 @@ def test_openwa_notifier_sends_authenticated_request() -> None:
 def test_openwa_notifier_requires_api_key() -> None:
     with pytest.raises(ValueError, match="OPENWA_API_KEY"):
         OpenWaWhatsAppNotifier(_settings(openwa_api_key=""))
+
+
+def test_composite_isolates_failed_channel_and_delivers_healthy_channel() -> None:
+    calls = []
+
+    class Broken(Notifier):
+        def send(self, alert):
+            calls.append("broken")
+            raise OSError("network down")
+
+    class Healthy(Notifier):
+        def send(self, alert):
+            calls.append("healthy")
+
+    CompositeNotifier([Broken(), Healthy()]).send(
+        Alert("title", "body", "source", 1, datetime.now(timezone.utc))
+    )
+    assert calls == ["broken", "healthy"]

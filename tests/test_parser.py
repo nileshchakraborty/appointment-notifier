@@ -168,3 +168,11 @@ def test_unrelated_message_does_not_match():
     signal = VisaSlotParser().parse("Good morning everyone")
 
     assert signal.matched is False
+
+
+def test_configured_terms_match_words_not_substrings():
+    parser = VisaSlotParser(required_terms=("h1", "h1b"), suppress_terms=("na",))
+
+    assert parser.parse("Chennai H1B July available").matched is True
+    assert parser.parse("January H1B slots available").matched is True
+    assert parser.parse("NA").category == "na_heartbeat"

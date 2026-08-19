@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from appointment_notifier.trend import TrendAnalyzer, format_report
-from appointment_notifier.models import SlotSignal, TelegramMessage
+from appointment_notifier.models import Alert, SlotSignal, TelegramMessage
 from appointment_notifier.store import AlertStore
 from appointment_notifier.parser import VisaSlotParser
 
@@ -40,6 +40,9 @@ def test_report_separates_bulk_from_individual_posts() -> None:
 
     assert report.bulk_release_posts == 1
     assert report.individual_availability_posts == 1
+    assert report.last_bulk_release is not None
+    assert report.last_individual_availability is not None
+    assert "Last bulk release post:" in format_report(report)
     assert "bulk-release posts" in format_report(report)
 
 
@@ -91,6 +94,18 @@ def test_legacy_bulk_alerts_are_backclassified(tmp_path) -> None:
     rows, _ = store.trend_points()
 
     assert rows[0]["category"] == "bulk_release"
+
+
+def test_alert_dedupe_check_does_not_reserve_before_delivery(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    message = TelegramMessage(1, "H1B slots available", datetime.now(timezone.utc))
+    assert store.is_new(message)
+    assert store.is_new(message)
+    alert = Alert("title", "body", "source", 1, message.sent_at)
+    store.record_alert(message, alert)
+    assert not store.is_new(message)
+    edited = TelegramMessage(1, "H1B many slots available", message.sent_at)
+    assert not store.is_new(edited)
 
 
 def test_reclassifies_pre_category_observations(tmp_path) -> None:

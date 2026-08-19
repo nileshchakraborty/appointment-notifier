@@ -179,7 +179,27 @@ class AlertStore:
             query += " where sent_at >= ?"
             params = (since,)
         query += " group by category"
-        return {str(row["category"]): int(row["count"]) for row in self.conn.execute(query, params)}
+        summary = {str(row["category"]): int(row["count"]) for row in self.conn.execute(query, params)}
+        # Include pre-observation alerts in exclusion counts. Older databases
+        # have useful history only in ``alerts`` and otherwise make /trend
+        # report an artificially clean dataset.
+        observed_ids = {
+            int(row["message_id"])
+            for row in self.conn.execute("select message_id from observed_messages")
+        }
+        legacy_query = "select message_id, body, sent_at from alerts where title is not null"
+        legacy_params: tuple[object, ...] = ()
+        if since:
+            legacy_query += " and sent_at >= ?"
+            legacy_params = (since,)
+        parser = VisaSlotParser()
+        for row in self.conn.execute(legacy_query, legacy_params):
+            if int(row["message_id"]) in observed_ids:
+                continue
+            signal = parser.parse(str(row["body"] or ""))
+            if signal.category:
+                summary[signal.category] = summary.get(signal.category, 0) + 1
+        return summary
 
     def recent_chat_messages(self, chat_id: str, limit: int) -> list[dict[str, str]]:
         rows = self.conn.execute(
@@ -234,14 +254,23 @@ class AlertStore:
             )
         return cursor.rowcount
 
-    def is_new(self, message: TelegramMessage) -> bool:
+    def has_alert(self, message: TelegramMessage) -> bool:
         digest = self._digest(message)
-        with self.conn:
-            cursor = self.conn.execute(
-                "insert or ignore into alerts (digest, message_id) values (?, ?)",
-                (digest, message.message_id),
-            )
-        return cursor.rowcount == 1
+        # Telegram message edits retain the same message id but change text;
+        # do not notify repeatedly for every edited copy.
+        row = self.conn.execute(
+            "select 1 from alerts where digest = ? or message_id = ?",
+            (digest, message.message_id),
+        ).fetchone()
+        return row is not None
+
+    def is_new(self, message: TelegramMessage) -> bool:
+        """Backward-compatible read-only dedupe check.
+
+        Reservation before delivery loses alerts permanently when a notifier
+        fails.  Callers should record the alert only after successful delivery.
+        """
+        return not self.has_alert(message)
 
     def record_alert(self, message: TelegramMessage, alert: Alert) -> None:
         digest = self._digest(message)

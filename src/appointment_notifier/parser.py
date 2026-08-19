@@ -269,7 +269,14 @@ class VisaSlotParser:
 
     @staticmethod
     def _first_contains(text: str, terms: tuple[str, ...]) -> str | None:
-        return next((term for term in terms if term in text), None)
+        # Terms are configuration, not arbitrary substrings.  A suppress term
+        # such as ``NA`` must not match ``Chennai`` or ``January`` and ``H1``
+        # must not match ``H1B``.  Preserve spaces inside multi-word phrases.
+        for term in terms:
+            escaped = re.escape(term.strip().lower()).replace(r"\ ", r"\s+")
+            if re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", text.lower()):
+                return term
+        return None
 
     @staticmethod
     def _first_pattern(text: str, patterns: tuple[re.Pattern[str], ...]) -> str | None:

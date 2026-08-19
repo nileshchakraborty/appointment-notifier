@@ -167,7 +167,9 @@ class TelegramBotCommandListener:
         if len(question) > 1500:
             return "Please keep each question under 1,500 characters."
         try:
-            return await self.chat_service.answer(chat_id, question)
+            service_settings = getattr(self.chat_service, "settings", None)
+            timeout = max(1, int(getattr(service_settings, "chat_timeout_seconds", 150)))
+            return await asyncio.wait_for(self.chat_service.answer(chat_id, question), timeout=timeout)
         except Exception:
             LOGGER.exception("Pi-local chat request failed")
             return "The Pi-local model is temporarily unavailable. Try again shortly or use /trend."
