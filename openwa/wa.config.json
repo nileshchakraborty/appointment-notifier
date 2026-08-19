@@ -1,0 +1,49 @@
+{
+  "headless": true,
+  "useChrome": true,
+  "executablePath": "/usr/bin/chromium",
+  "userDataDir": "/sessions/appointment-notifier",
+  "authTimeout": 0,
+  "qrTimeout": 0,
+  "host": "0.0.0.0",
+  "port": 8081,
+  "sessionId": "appointment-notifier",
+  "cors": [
+    "http://127.0.0.1:8081",
+    "http://localhost:8081",
+    "http://192.168.1.229:8081",
+    "http://rpi.local:8081",
+    "http://openwa.rpi.local",
+    "http://openwa.rpi.local:8081"
+  ],
+  "dashboard": true,
+  "mcp": {
+    "enabled": false,
+    "exposeToolsMeta": false
+  },
+  "plugins": [],
+  "integrations": {},
+  "bypassCSP": false,
+  "devtools": false,
+  "chromiumArgs": [
+    "--no-sandbox",
+    "--disable-setuid-sandbox"
+  ],
+  "logConsole": false,
+  "logConsoleErrors": false,
+  "logFile": false,
+  "logInternalEvents": false,
+  "logLevel": "silent",
+  "qrLogSkip": true,
+  "blockCrashLogs": true,
+  "skipUpdateCheck": true,
+  "keepUpdated": false,
+  "ghPatch": false,
+  "cachedPatch": false,
+  "stickerServerEndpoint": false,
+  "linkParser": "http://127.0.0.1:9",
+  "screenshotOnInitializationBrowserError": false,
+  "lightpanda": {
+    "disableTelemetry": true
+  }
+}

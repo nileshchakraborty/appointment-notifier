@@ -1,0 +1,22 @@
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: rpi-pihole
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:53:53/tcp"
+      - "0.0.0.0:53:53/udp"
+      - "0.0.0.0:3000:80/tcp"
+    environment:
+      TZ: "America/Los_Angeles"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD:?PIHOLE_PASSWORD is required}"
+      FTLCONF_dns_listeningMode: "all"
+      FTLCONF_dns_upstreams: "192.168.1.1"
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+      - ./pihole/etc-dnsmasq.d:/etc/dnsmasq.d
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

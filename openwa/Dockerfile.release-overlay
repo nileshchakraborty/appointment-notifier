@@ -1,0 +1,11 @@
+FROM appointment-openwa:6017138df
+
+USER root
+COPY --chown=node:node openwa-fork/packages/api/dist/ /usr/src/app/node_modules/@open-wa/api/dist/
+COPY --chown=node:node openwa-fork/apps/dashboard-neo/dist/ /usr/src/app/node_modules/@open-wa/api/dashboard-neo/dist/
+COPY --chown=node:node openwa-fork/packages/wa-automate/dist/ /usr/src/app/dist/
+COPY --chmod=755 --chown=node:node openwa/docker-entrypoint.sh /usr/local/bin/openwa-entrypoint
+USER node
+
+ENTRYPOINT ["/usr/local/bin/openwa-entrypoint"]
+CMD ["node", "dist/multi-session.cjs", "--config", "/config/wa.config.json"]

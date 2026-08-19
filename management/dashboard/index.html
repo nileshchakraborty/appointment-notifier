@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RPi services</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f8fafc; color: #172033; }
+    main { width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 56px 0; }
+    h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -.02em; }
+    .subtitle { margin: 0 0 28px; color: #64748b; }
+    .card { overflow: hidden; border: 1px solid #dbe3ee; border-radius: 16px; background: white; box-shadow: 0 8px 24px #17203312; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 18px 20px; text-align: left; border-bottom: 1px solid #e8edf3; vertical-align: middle; }
+    th { color: #64748b; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; background: #f8fafc; }
+    tr:last-child td { border-bottom: 0; }
+    .service { font-weight: 650; }
+    .description { display: block; margin-top: 4px; color: #64748b; font-size: 13px; }
+    a { color: #1565c0; font-weight: 600; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .fallback { color: #475569; font-size: 13px; font-weight: 500; }
+    @media (max-width: 640px) { main { padding: 28px 0; } th, td { padding: 14px 12px; } th:nth-child(2), td:nth-child(2) { display: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>RPi services</h1>
+    <p class="subtitle">Private LAN quick links</p>
+    <section class="card">
+      <table>
+        <thead><tr><th>Service</th><th>Hostname</th><th>Direct fallback</th></tr></thead>
+        <tbody>
+          <tr><td><span class="service">Portainer</span><span class="description">Docker management</span></td><td><a href="http://portainer.rpi.home.arpa/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:9000/">rpi.local:9000</a></td></tr>
+          <tr><td><span class="service">OpenWA</span><span class="description">WhatsApp gateway</span></td><td><a href="http://openwa.rpi.home.arpa/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:8081/dashboard/">rpi.local:8081</a></td></tr>
+          <tr><td><span class="service">Pi-hole</span><span class="description">DNS management</span></td><td><a href="http://pihole.rpi.home.arpa/admin/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:3000/admin/">rpi.local:3000</a></td></tr>
+          <tr><td><span class="service">Streambert TV</span><span class="description">TV service</span></td><td><a href="http://streambert-tv.rpi.home.arpa/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:8090/">rpi.local:8090</a></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

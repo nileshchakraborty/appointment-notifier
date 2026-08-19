@@ -1,0 +1,22 @@
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: rpi-portainer
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: rpi-caddy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls:/etc/caddy/tls:ro
+      - ./dashboard:/srv/dashboard:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config

@@ -1,0 +1,9 @@
+{
+  "name": "appointment-openwa",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned OpenWA runtime for appointment-notifier",
+  "dependencies": {
+    "@open-wa/wa-automate": "5.0.0-alpha.8"
+  }
+}

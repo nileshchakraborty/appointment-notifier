@@ -1,0 +1,74 @@
+services:
+  openwa:
+    build:
+      context: .
+      dockerfile: openwa/Dockerfile
+    image: appointment-openwa:975a32d4e
+    container_name: appointment-openwa
+    init: true
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8081:8081"
+    environment:
+      NODE_ENV: production
+      WA_API_KEY: "${OPENWA_API_KEY:?OPENWA_API_KEY is required}"
+      OPENWA_ALLOW_REGISTRATION: "true"
+      OPENWA_MAX_SESSIONS: "3"
+    volumes:
+      - ./openwa/sessions:/sessions
+      - ./openwa/wa.config.json:/config/wa.config.json:ro
+    shm_size: 2gb
+    mem_limit: 3g
+    cpus: "3.00"
+    pids_limit: 1024
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    stop_grace_period: 30s
+
+  appointment-notifier:
+    build:
+      context: .
+    image: appointment-notifier:local
+    container_name: appointment-notifier
+    init: true
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    environment:
+      OPENWA_URL: http://openwa:8081
+    depends_on:
+      openwa:
+        condition: service_healthy
+    volumes:
+      - ./.state:/app/.state
+      - ./.secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    mem_limit: 256m
+    cpus: "0.50"
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    stop_grace_period: 30s

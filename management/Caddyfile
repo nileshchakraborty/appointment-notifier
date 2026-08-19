@@ -1,0 +1,47 @@
+portainer.rpi.home.arpa {
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+    reverse_proxy 127.0.0.1:9000
+}
+
+rpi.local, rpi.home.arpa, dashboard.rpi.home.arpa {
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+    root * /srv/dashboard
+    file_server
+}
+
+openwa.rpi.home.arpa {
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+    reverse_proxy 192.168.1.229:8081
+}
+
+pihole.rpi.home.arpa {
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+    reverse_proxy 192.168.1.229:3000
+}
+
+streambert-tv.rpi.home.arpa {
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+    reverse_proxy 192.168.1.229:8090
+}
+
+# Plain HTTP fallback for clients that cannot trust the private LAN CA.
+http://portainer.rpi.home.arpa {
+    reverse_proxy 127.0.0.1:9000
+}
+
+http://rpi.local, http://rpi.home.arpa, http://dashboard.rpi.home.arpa {
+    root * /srv/dashboard
+    file_server
+}
+
+http://openwa.rpi.home.arpa {
+    reverse_proxy 192.168.1.229:8081
+}
+
+http://pihole.rpi.home.arpa {
+    reverse_proxy 192.168.1.229:3000
+}
+
+http://streambert-tv.rpi.home.arpa {
+    reverse_proxy 192.168.1.229:8090
+}

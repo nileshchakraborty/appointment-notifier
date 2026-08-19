@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appointment-notifier"
+version = "0.1.0"
+description = "Telegram visa appointment slot watcher with email, SMS, WhatsApp, and iMessage notifications."
+requires-python = ">=3.11"
+dependencies = [
+  "telethon>=1.35,<2",
+  "Pillow>=10,<13",
+  "pytesseract>=0.3.10,<0.4",
+]
+
+[project.optional-dependencies]
+sms = ["twilio>=9,<10"]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+appointment-notifier = "appointment_notifier.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
