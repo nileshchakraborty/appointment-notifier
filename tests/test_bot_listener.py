@@ -142,3 +142,26 @@ def test_help_command_lists_supported_commands(tmp_path):
         "/revoke",
     ):
         assert command in response
+
+
+def test_status_reports_backend_and_ai_health(tmp_path):
+    listener = _listener(tmp_path)
+
+    class FakeLlm:
+        enabled = True
+
+        def health(self):
+            return {"nvidia": "unavailable (HTTP 401)", "ollama": "connected"}
+
+    class FakeChat:
+        llm_client = FakeLlm()
+
+    listener.chat_service = FakeChat()
+    listener._api_json = lambda method, params: {"ok": True}
+
+    response = asyncio.run(listener._format_status())
+
+    assert "Database: connected" in response
+    assert "Telegram Bot API: connected" in response
+    assert "AI nvidia: unavailable (HTTP 401)" in response
+    assert "AI ollama: connected" in response

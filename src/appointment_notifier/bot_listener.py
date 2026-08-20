@@ -124,7 +124,7 @@ class TelegramBotCommandListener:
         if command in {"/start", "/help"}:
             response = HELP_TEXT
         elif command == "/status":
-            response = "Appointment notifier is running. Use /current or /last."
+            response = await self._format_status()
         elif command == "/trend":
             if self.trend_service is None:
                 response = "Trend analysis is not configured."
@@ -177,6 +177,36 @@ class TelegramBotCommandListener:
         except Exception:
             LOGGER.exception("Pi-local chat request failed")
             return "The Pi-local model is temporarily unavailable. Try again shortly or use /trend."
+
+    async def _format_status(self) -> str:
+        lines = ["System status:"]
+        try:
+            self.store.conn.execute("select 1").fetchone()
+            lines.append("Database: connected")
+        except Exception as exc:
+            lines.append(f"Database: unavailable ({exc})")
+
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._api_json, "getMe", {}),
+                timeout=8,
+            )
+            lines.append("Telegram Bot API: connected")
+        except Exception as exc:
+            lines.append(f"Telegram Bot API: unavailable ({type(exc).__name__})")
+
+        llm_client = getattr(self.chat_service, "llm_client", None)
+        if llm_client is None or not getattr(llm_client, "enabled", False):
+            lines.append("AI providers: not configured")
+        else:
+            try:
+                statuses = await asyncio.to_thread(llm_client.health)
+            except Exception as exc:
+                lines.append(f"AI providers: unavailable ({type(exc).__name__})")
+            else:
+                for provider, status in statuses.items():
+                    lines.append(f"AI {provider}: {status}")
+        return "\n".join(lines)
 
     def _format_current(self) -> str:
         state = self.store.availability_state()
