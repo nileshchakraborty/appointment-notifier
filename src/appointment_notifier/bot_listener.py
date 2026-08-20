@@ -16,6 +16,8 @@ LOGGER = logging.getLogger(__name__)
 
 HELP_TEXT = (
     "Commands:\n"
+    "/start - show this command list\n"
+    "/help - show this command list\n"
     "/current - show whether the latest known state is available\n"
     "/last - show previous availability timestamp\n"
     "/status - show watcher status\n"
