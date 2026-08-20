@@ -23,15 +23,19 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
     stats = {"messages": 0, "images": 0, "ocr_cached": 0, "ocr_processed": 0, "matched": 0}
     async with TelegramClient(session_path, api_id, api_hash) as client:
         if all_dialogs:
-            chats = tuple(str(dialog.entity.id) async for dialog in client.iter_dialogs() if getattr(dialog, "is_channel", False) or getattr(dialog, "is_group", False))
-        for chat in chats:
-            entity = await client.get_entity(chat)
+            targets = [
+                (str(dialog.entity.id), dialog.entity)
+                async for dialog in client.iter_dialogs()
+                if getattr(dialog, "is_channel", False) or getattr(dialog, "is_group", False)
+            ]
+        else:
+            targets = [(chat, await client.get_entity(chat)) for chat in chats]
+        for chat, entity in targets:
             cursor = store.backfill_cursor(chat)
             kwargs = {"limit": limit}
             if cursor:
                 kwargs["max_id"] = cursor
-            messages = [message async for message in client.iter_messages(entity, **kwargs)]
-            for message in reversed(messages):
+            async for message in client.iter_messages(entity, **kwargs):
                 message_id = int(message.id)
                 model = TelegramMessage(
                     message_id=message_id, text=message.message or "", sent_at=message.date,
