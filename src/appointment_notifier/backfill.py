@@ -32,7 +32,8 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
         else:
             targets = [(chat, await client.get_entity(chat)) for chat in chats]
         for chat, entity in targets:
-            cursor = store.backfill_cursor(chat)
+            chat_key = str(entity.id)
+            cursor = store.backfill_cursor(chat_key)
             kwargs = {"limit": limit}
             if cursor:
                 kwargs["max_id"] = cursor
@@ -41,7 +42,7 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
                 model = TelegramMessage(
                     message_id=message_id, text=message.message or "", sent_at=message.date,
                     url=f"https://t.me/{chat.removeprefix('@')}/{message_id}",
-                    has_image=_has_image(message), source_chat_id=chat,
+                    has_image=_has_image(message), source_chat_id=chat_key,
                 )
                 stats["messages"] += 1
                 if dry_run:
@@ -53,7 +54,7 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
                     stats["images"] += 1
                     directory = _select_media_dir(media_dirs)
                     if directory:
-                        media_path = str(directory / f"{chat.strip('@').replace('/', '_')}-{message_id}.image")
+                        media_path = str(directory / f"{chat_key}-{message_id}.image")
                         try:
                             downloaded = await asyncio.wait_for(
                                 client.download_media(message, file=media_path),
@@ -73,14 +74,14 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
                                     stats["ocr_processed"] += 1
                                     ocr_text, portal_state = analysis.ocr_text, analysis.portal_state
                         except Exception:
-                            LOGGER.exception("Failed media/OCR for %s:%s", chat, message_id)
+                            LOGGER.exception("Failed media/OCR for %s:%s", chat_key, message_id)
                         finally:
                             Path(media_path).unlink(missing_ok=True)
                 store.record_telegram_message(model, media_sha256=media_sha256)
                 signal = parser.parse(model.text, has_image=model.has_image, ocr_text=ocr_text, portal_state=portal_state)
                 store.record_observation(model, signal)
                 stats["matched"] += int(signal.matched)
-                store.set_backfill_cursor(chat, message_id)
+                store.set_backfill_cursor(chat_key, message_id)
     return stats
 
 
