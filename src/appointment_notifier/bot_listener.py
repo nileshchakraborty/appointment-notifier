@@ -187,10 +187,12 @@ class TelegramBotCommandListener:
             lines.append(f"Database: unavailable ({exc})")
 
         try:
-            await asyncio.wait_for(
+            telegram_result = await asyncio.wait_for(
                 asyncio.to_thread(self._api_json, "getMe", {}),
                 timeout=8,
             )
+            if not telegram_result.get("ok"):
+                raise RuntimeError("Telegram API returned ok=false")
             lines.append("Telegram Bot API: connected")
         except Exception as exc:
             lines.append(f"Telegram Bot API: unavailable ({type(exc).__name__})")
