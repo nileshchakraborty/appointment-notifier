@@ -14,6 +14,20 @@ from .trend import TrendService
 
 LOGGER = logging.getLogger(__name__)
 
+HELP_TEXT = (
+    "Commands:\n"
+    "/current - show whether the latest known state is available\n"
+    "/last - show previous availability timestamp\n"
+    "/status - show watcher status\n"
+    "/trend - summarize posting history and next likely window\n"
+    "/ask <question> - chat with the Pi-local appointment assistant\n"
+    "/forget - erase your saved conversation history\n"
+    "/whoami - show your Telegram identifiers\n"
+    "/users - list allowed users (owner only)\n"
+    "/allow <chat_id|@username> [owner] - add a user (owner only)\n"
+    "/revoke <chat_id|@username> - remove a non-owner user (owner only)"
+)
+
 
 class TelegramBotCommandListener:
     def __init__(
@@ -106,19 +120,7 @@ class TelegramBotCommandListener:
 
         command = text.split()[0].split("@")[0].lower()
         if command in {"/start", "/help"}:
-            response = (
-                "Commands:\n"
-                "/current - show whether the latest known state is available\n"
-                "/last - show previous availability timestamp\n"
-                "/status - show watcher status\n"
-                "/trend - summarize posting history and next likely window\n"
-                "/ask <question> - chat with the Pi-local appointment assistant\n"
-                "/forget - erase your saved conversation history\n"
-                "/whoami - show your Telegram identifiers\n"
-                "/users - list allowed users (owner only)\n"
-                "/allow <chat_id|@username> [owner] - add a user (owner only)\n"
-                "/revoke <chat_id|@username> - remove a non-owner user (owner only)"
-            )
+            response = HELP_TEXT
         elif command == "/status":
             response = "Appointment notifier is running. Use /current or /last."
         elif command == "/trend":
