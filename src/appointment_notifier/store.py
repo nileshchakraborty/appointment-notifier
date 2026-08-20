@@ -363,6 +363,25 @@ class AlertStore:
             return None
         return value if isinstance(value, dict) else None
 
+    def record_external_evidence(self, *, source_url: str, source_type: str, claim: str,
+                                 appointment_type: str, location: str | None,
+                                 verification_status: str, used_for_forecast: bool = False) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                insert into external_evidence
+                  (source_url, source_type, claim, appointment_type, location,
+                   verification_status, used_for_forecast)
+                values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(source_url, claim) do update set
+                  verification_status = excluded.verification_status,
+                  used_for_forecast = excluded.used_for_forecast,
+                  updated_at = current_timestamp
+                """,
+                (source_url, source_type, claim, appointment_type, location,
+                 verification_status, 1 if used_for_forecast else 0),
+            )
+
     def set_state(self, key: str, value: str) -> None:
         with self.conn:
             self.conn.execute(
@@ -711,6 +730,23 @@ class AlertStore:
                   source text not null,
                   report_json text not null,
                   created_at text not null default current_timestamp
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                create table if not exists external_evidence (
+                  id integer primary key,
+                  source_url text not null,
+                  source_type text not null,
+                  claim text not null,
+                  appointment_type text not null,
+                  location text,
+                  verification_status text not null,
+                  used_for_forecast integer not null default 0,
+                  created_at text not null default current_timestamp,
+                  updated_at text not null default current_timestamp,
+                  unique(source_url, claim)
                 )
                 """
             )
