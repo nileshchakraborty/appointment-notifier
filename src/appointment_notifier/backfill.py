@@ -12,6 +12,7 @@ from .store import AlertStore
 from .telegram_watcher import _has_image, _select_media_dir
 
 LOGGER = logging.getLogger(__name__)
+MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 120
 
 
 async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tuple[str, ...], store: AlertStore, parser: VisaSlotParser, media_dirs: tuple[Path, ...], limit: int | None = None, dry_run: bool = False, all_dialogs: bool = False) -> dict[str, int]:
@@ -54,7 +55,10 @@ async def backfill(*, api_id: int, api_hash: str, session_path: str, chats: tupl
                     if directory:
                         media_path = str(directory / f"{chat.strip('@').replace('/', '_')}-{message_id}.image")
                         try:
-                            downloaded = await client.download_media(message, file=media_path)
+                            downloaded = await asyncio.wait_for(
+                                client.download_media(message, file=media_path),
+                                timeout=MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+                            )
                             if downloaded:
                                 media_path = str(downloaded)
                                 analysis = PortalMediaAnalyzer().analyze(media_path)
