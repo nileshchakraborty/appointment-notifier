@@ -169,7 +169,19 @@ class AlertStore:
             order by sent_at
             """
         ).fetchall()
-        first_matched_at = str(observed[0]["sent_at"]) if observed else None
+        external = self.conn.execute(
+            """
+            select source_message_id as message_id, observed_at as sent_at,
+                   claim as text, source_url as source, 0 as has_image,
+                   'bulk_release' as category, '' as ocr_text, '' as portal_state,
+                   '[]' as locations, '[]' as visa_terms
+            from external_evidence
+            where used_for_forecast = 1 and source_message_id is not null and observed_at is not null
+            order by observed_at
+            """
+        ).fetchall()
+        first_values = [str(row["sent_at"]) for row in (*observed, *external) if row["sent_at"]]
+        first_matched_at = min(first_values) if first_values else None
         legacy_query = """
             select message_id, sent_at, body as text, source, 0 as has_image,
                    'legacy' as category, '' as ocr_text, '' as portal_state, '[]' as locations, '[]' as visa_terms
@@ -190,9 +202,11 @@ class AlertStore:
             if signal.matched:
                 item["category"] = signal.category
             legacy_rows.append(item)
-        combined = legacy_rows + [dict(row) for row in observed]
+        combined = legacy_rows + [dict(row) for row in observed] + [dict(row) for row in external]
         combined.sort(key=lambda row: str(row.get("sent_at") or ""))
-        if observed and legacy:
+        if external:
+            source = "classified observations with verified external evidence"
+        elif observed and legacy:
             source = "classified observations with legacy baseline"
         elif observed:
             source = "classified observations"
@@ -365,21 +379,26 @@ class AlertStore:
 
     def record_external_evidence(self, *, source_url: str, source_type: str, claim: str,
                                  appointment_type: str, location: str | None,
-                                 verification_status: str, used_for_forecast: bool = False) -> None:
+                                 verification_status: str, used_for_forecast: bool = False,
+                                 source_message_id: int | None = None,
+                                 observed_at: str | None = None) -> None:
         with self.conn:
             self.conn.execute(
                 """
                 insert into external_evidence
                   (source_url, source_type, claim, appointment_type, location,
-                   verification_status, used_for_forecast)
-                values (?, ?, ?, ?, ?, ?, ?)
+                   verification_status, used_for_forecast, source_message_id, observed_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(source_url, claim) do update set
                   verification_status = excluded.verification_status,
                   used_for_forecast = excluded.used_for_forecast,
+                  source_message_id = excluded.source_message_id,
+                  observed_at = excluded.observed_at,
                   updated_at = current_timestamp
                 """,
                 (source_url, source_type, claim, appointment_type, location,
-                 verification_status, 1 if used_for_forecast else 0),
+                 verification_status, 1 if used_for_forecast else 0,
+                 source_message_id, observed_at),
             )
 
     def set_state(self, key: str, value: str) -> None:
@@ -744,12 +763,19 @@ class AlertStore:
                   location text,
                   verification_status text not null,
                   used_for_forecast integer not null default 0,
+                  source_message_id integer,
+                  observed_at text,
                   created_at text not null default current_timestamp,
                   updated_at text not null default current_timestamp,
                   unique(source_url, claim)
                 )
                 """
             )
+            columns = {row[1] for row in self.conn.execute("pragma table_info(external_evidence)")}
+            if "source_message_id" not in columns:
+                self.conn.execute("alter table external_evidence add column source_message_id integer")
+            if "observed_at" not in columns:
+                self.conn.execute("alter table external_evidence add column observed_at text")
             self.conn.execute(
                 """
                 create index if not exists telegram_chat_messages_chat_id_id
