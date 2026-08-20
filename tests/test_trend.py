@@ -43,6 +43,23 @@ def test_report_separates_bulk_from_individual_posts() -> None:
     assert report.last_bulk_release is not None
     assert report.last_individual_availability is not None
     assert "Last bulk release post:" in format_report(report)
+
+
+def test_bulk_forecast_uses_bulk_history_only() -> None:
+    start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = [
+        _row(1, start, "bulk_release"),
+        _row(2, start + timedelta(days=7), "bulk_release"),
+        _row(3, start + timedelta(days=14), "bulk_release"),
+        _row(4, start + timedelta(days=20), "individual_availability"),
+    ]
+
+    report = TrendAnalyzer().analyze(rows, "classified observations")
+
+    assert report.bulk_release_events == 3
+    assert report.bulk_median_gap_days == 7
+    assert report.next_bulk_predicted.startswith("2026-07-22")
+    assert "Next bulk-release statistical center:" in format_report(report)
     assert "bulk-release posts" in format_report(report)
 
 
