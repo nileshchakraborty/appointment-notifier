@@ -36,6 +36,7 @@ class AppointmentNotifierApp:
             LOGGER.info("Reclassified %s historical observations", reclassified)
 
     async def handle_message(self, message: TelegramMessage) -> None:
+        self.store.record_telegram_message(message)
         ocr_text = ""
         portal_state = None
         if message.image_path:

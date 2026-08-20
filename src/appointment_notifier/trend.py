@@ -230,8 +230,20 @@ class TrendService:
         self.llm_client = llm_client or build_llm_client(settings)
 
     def report(self) -> TrendReport:
+        snapshot = self.store.latest_trend_snapshot()
+        if snapshot:
+            try:
+                return TrendReport(**snapshot)
+            except (TypeError, ValueError):
+                LOGGER.warning("Ignoring invalid persisted trend snapshot")
         rows, source = self.store.trend_points()
         return TrendAnalyzer(self.settings.timezone).analyze(rows, source, self.store.classification_summary())
+
+    def refresh_snapshot(self) -> TrendReport:
+        rows, source = self.store.trend_points()
+        report = TrendAnalyzer(self.settings.timezone).analyze(rows, source, self.store.classification_summary())
+        self.store.save_trend_snapshot(report.as_dict(), source=source)
+        return report
 
     def summarize(self, use_llm: bool = True) -> str:
         report = self.report()

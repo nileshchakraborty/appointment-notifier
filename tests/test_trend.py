@@ -125,6 +125,22 @@ def test_alert_dedupe_check_does_not_reserve_before_delivery(tmp_path) -> None:
     assert not store.is_new(edited)
 
 
+def test_trend_snapshot_round_trips_for_query_time_reads(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    payload = {"data_source": "backfill", "matching_posts": 0}
+    store.save_trend_snapshot(payload)
+    assert store.latest_trend_snapshot() == payload
+
+
+def test_canonical_messages_are_scoped_by_source_chat(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    first = TelegramMessage(7, "one", datetime.now(timezone.utc), source_chat_id="chat-a")
+    second = TelegramMessage(7, "two", datetime.now(timezone.utc), source_chat_id="chat-b")
+    store.record_telegram_message(first)
+    store.record_telegram_message(second)
+    assert store.conn.execute("select count(*) from telegram_messages").fetchone()[0] == 2
+
+
 def test_reclassifies_pre_category_observations(tmp_path) -> None:
     store = AlertStore(tmp_path / "state.sqlite3")
     store.record_observation(

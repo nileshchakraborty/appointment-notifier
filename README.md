@@ -176,6 +176,20 @@ Every response names the provider that answered. If all providers fail,
 `/trend` still returns the deterministic report and chat fails closed with a
 short retry message.
 
+### Historical backfill
+
+Run the resumable importer before relying on long-range forecasts:
+
+```bash
+appointment-notifier backfill --chat @Regular_H1B_H4_VisaSlotsChecking --limit 5000
+```
+
+Use `--all-chats` to inventory accessible Telegram groups/channels, or repeat
+`--chat` for an explicit allowlist. The importer stores canonical messages,
+OCR/layout results, parser classifications, checkpoints, and a materialized
+trend snapshot in SQLite. It does not call the LLM. Re-running resumes from
+the per-chat checkpoint and reuses cached OCR by media hash.
+
 The supported providers are:
 
 - `nvidia`: NVIDIA-hosted NIM using its OpenAI-compatible chat endpoint.

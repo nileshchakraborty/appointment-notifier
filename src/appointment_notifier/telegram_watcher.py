@@ -84,6 +84,7 @@ def _to_model(message, channel: str, image_path: str | None = None) -> TelegramM
         url=f"https://t.me/{url_channel}/{message_id}" if url_channel else None,
         has_image=_has_image(message),
         image_path=image_path,
+        source_chat_id=channel,
     )
 
 

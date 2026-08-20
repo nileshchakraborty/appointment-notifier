@@ -30,6 +30,7 @@ class TelegramSettings:
     api_hash: str
     session_path: Path
     channel: str
+    source_chats: tuple[str, ...]
     history_limit: int
 
 
@@ -133,6 +134,7 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             api_hash=api_hash,
             session_path=Path(os.getenv("TELEGRAM_SESSION_PATH", ".state/telegram.session")),
             channel=os.getenv("TELEGRAM_CHANNEL", "@Regular_H1B_H4_VisaSlotsChecking"),
+            source_chats=_csv("TELEGRAM_SOURCE_CHATS") or (os.getenv("TELEGRAM_CHANNEL", "@Regular_H1B_H4_VisaSlotsChecking"),),
             history_limit=_int("TELEGRAM_HISTORY_LIMIT", 25),
         ),
         telegram_alert=TelegramAlertSettings(

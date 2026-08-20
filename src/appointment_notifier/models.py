@@ -12,6 +12,7 @@ class TelegramMessage:
     url: str | None = None
     has_image: bool = False
     image_path: str | None = None
+    source_chat_id: str = "legacy"
 
 
 @dataclass(frozen=True)
