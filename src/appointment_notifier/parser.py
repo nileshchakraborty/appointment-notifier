@@ -131,12 +131,21 @@ BULK_PATTERNS = (
     re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s*[-–/]\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)", re.IGNORECASE),
 )
 
-INVALID_PATTERNS = (
+GHOST_PATTERNS = (
     re.compile(r"\bghost\s+slots?\b", re.IGNORECASE),
+    re.compile(r"\bunverified\s+slots?\b", re.IGNORECASE),
+)
+
+OFC_ONLY_PATTERNS = (
+    re.compile(r"\b(?:only\s+ofc|ofc\s+only|only\s+vac|vac\s+only)\b", re.IGNORECASE),
+    re.compile(r"\b(?:ofc|vac)\s+(?:available|opened)\b.*\b(?:no|empty)\s+consular\b", re.IGNORECASE),
+    re.compile(r"\b(?:ofc|vac)\s+\d+\s*[-–—]?\s*opened\b", re.IGNORECASE),
+)
+
+INVALID_PATTERNS = (
     re.compile(r"\bno\s+(?:time|time\s+slots?|submit\s+buttons?)\b", re.IGNORECASE),
     re.compile(r"\b(?:submit\s+button|slot)\s+(?:did\s+not|does\s+not|doesn't|didn't)\s+work\b", re.IGNORECASE),
     re.compile(r"\bnot\s+bookable\b", re.IGNORECASE),
-    re.compile(r"\b(?:ofc|vac)\s+(?:available|opened)\b.*\bno\s+consular\b", re.IGNORECASE),
 )
 
 SPAM_PATTERNS = (
@@ -230,41 +239,71 @@ class VisaSlotParser:
         if self._first_pattern(normalized, QUESTION_PATTERNS):
             return SlotSignal(False, "discussion or question", category="discussion", ocr_text=ocr_text, portal_state=portal_state)
 
-        if portal_state in {"ghost_or_unbookable", "partial_ofc_only", "unavailable_or_unknown"}:
+        if portal_state in {"ghost_or_unbookable", "unavailable_or_unknown"}:
             return SlotSignal(False, f"portal classified as {portal_state}", available_state=False, category="unbookable", ocr_text=ocr_text, portal_state=portal_state)
 
         silent = bool(silent_hit and not loud_hit)
 
+        has_ghost = bool(self._first_pattern(normalized, GHOST_PATTERNS) or portal_state == "potential_ghost")
+        is_ofc_only = bool(self._first_pattern(normalized, OFC_ONLY_PATTERNS) or portal_state == "partial_ofc_only")
+        is_bulk = bool(self._first_pattern(normalized, BULK_PATTERNS))
+
+        if has_ghost:
+            category = "potential_ghost"
+        elif is_ofc_only:
+            category = "ofc_only"
+        elif is_bulk:
+            category = "bulk_release"
+        else:
+            category = "individual_availability"
+
         if has_image:
             locations = tuple(location for location in LOCATIONS if location in normalized)
             visa_terms = tuple(term for term in VISA_TERMS if term in normalized)
-            if not (positive_hit or loud_hit or portal_state == "bookable"):
+            if not (positive_hit or loud_hit or has_ghost or is_ofc_only or portal_state in {"bookable", "partial_ofc_only", "potential_ghost"}):
                 return SlotSignal(False, "image requires caption or OCR classification", category="unknown_image", ocr_text=ocr_text, portal_state=portal_state)
+
+            if has_ghost:
+                reason = "potential ghost slot appointment report with image"
+            elif is_ofc_only:
+                reason = "OFC / biometrics availability report with image"
+            elif is_bulk:
+                reason = "bulk availability report with image"
+            else:
+                reason = "individual availability report with image"
+
             return SlotSignal(
                 True,
-                "individual availability report with image",
+                reason,
                 locations,
                 visa_terms,
                 silent,
                 available_state=True,
-                category="bulk_release" if self._first_pattern(normalized, BULK_PATTERNS) else "individual_availability",
+                category=category,
                 ocr_text=ocr_text,
                 portal_state=portal_state,
             )
 
         required_hit = self._first_contains(normalized, self.required_terms)
-        if not (required_hit or loud_hit):
+        if not (required_hit or loud_hit or has_ghost or is_ofc_only):
             return SlotSignal(False, "missing required visa or appointment term", category="discussion", ocr_text=ocr_text, portal_state=portal_state)
 
-        if not (positive_hit or loud_hit or silent_hit):
+        if not (positive_hit or loud_hit or silent_hit or has_ghost or is_ofc_only):
             return SlotSignal(False, "missing positive availability signal", category="discussion", ocr_text=ocr_text, portal_state=portal_state)
 
         locations = tuple(location for location in LOCATIONS if location in normalized)
         visa_terms = tuple(term for term in VISA_TERMS if term in normalized)
-        is_bulk = bool(self._first_pattern(normalized, BULK_PATTERNS))
-        reason = "silent informational availability signal" if silent else "positive availability signal"
+        if has_ghost:
+            reason = "potential ghost slot availability report"
+        elif silent:
+            reason = "silent informational availability signal"
+        elif is_ofc_only:
+            reason = "OFC / biometrics availability report"
+        else:
+            reason = "positive availability signal"
+
         return SlotSignal(True, reason, locations, visa_terms, silent, available_state=True,
-                          category="bulk_release" if is_bulk else "individual_availability",
+                          category=category,
                           ocr_text=ocr_text, portal_state=portal_state)
 
     @staticmethod

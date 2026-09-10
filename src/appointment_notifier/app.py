@@ -125,6 +125,10 @@ class AppointmentNotifierApp:
             body_parts.append("Silent informational alert.")
         if signal.category == "bulk_release":
             body_parts.append("Bulk appointment release detected.")
+        elif signal.category == "ofc_only":
+            body_parts.append("OFC / Biometrics slot availability detected (Consular slots may not be open yet or this is a Dropbox opening).")
+        elif signal.category == "potential_ghost":
+            body_parts.append("⚠️ Potential Ghost Slot / Unverified Report: This slot opening was reported as a potential ghost slot or unverified listing. Proceed with caution on the portal.")
         elif signal.category == "individual_availability":
             body_parts.append("Individual availability report detected.")
         if text:
@@ -134,10 +138,18 @@ class AppointmentNotifierApp:
         body_parts.extend(["", f"Source: {source}"])
         if message.sent_at:
             body_parts.append(f"Telegram time: {message.sent_at.isoformat()}")
+
+        if signal.category == "bulk_release":
+            title = "Bulk visa appointment release may be available"
+        elif signal.category == "ofc_only":
+            title = "📌 OFC / Biometrics visa appointment slot may be available"
+        elif signal.category == "potential_ghost":
+            title = "⚠️ Potential Ghost Slot / Unverified visa appointment report"
+        else:
+            title = "Visa appointment slot may be available"
+
         return Alert(
-            title=("Bulk visa appointment release may be available"
-                   if signal.category == "bulk_release"
-                   else "Visa appointment slot may be available"),
+            title=title,
             body="\n".join(part for part in body_parts if part is not None),
             source=source,
             message_id=message.message_id,

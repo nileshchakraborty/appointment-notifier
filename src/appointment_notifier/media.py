@@ -40,13 +40,20 @@ class PortalMediaAnalyzer:
         submit_disabled = bool(re.search(r"(?:submit).{0,25}(?:disabled|grey|gray|inactive)", normalized))
         has_ofc = bool(re.search(r"\b(?:ofc|vac)\b", normalized))
         has_consular = "consular" in normalized
+        has_ghost = bool(re.search(r"\bghost\s+slots?\b", normalized))
 
-        if has_ofc and not has_consular and has_positive_count:
-            state = "partial_ofc_only"
-        elif has_calendar and (not has_time_rows or not has_submit or submit_disabled):
+        if submit_disabled:
             state = "ghost_or_unbookable"
-        elif has_time_rows and has_positive_count and has_submit and not submit_disabled:
+        elif has_ghost:
+            state = "potential_ghost"
+        elif has_ofc and not has_consular and has_positive_count:
+            state = "partial_ofc_only"
+        elif has_positive_count and (has_calendar or has_time_rows):
             state = "bookable"
+        elif has_time_rows and has_submit and not submit_disabled:
+            state = "bookable"
+        elif has_calendar and (not has_time_rows and not has_positive_count):
+            state = "ghost_or_unbookable"
         elif text:
             state = "unavailable_or_unknown"
         else:
@@ -60,6 +67,7 @@ class PortalMediaAnalyzer:
             "submit_disabled": submit_disabled,
             "has_ofc": has_ofc,
             "has_consular": has_consular,
+            "has_ghost": has_ghost,
         }
         return MediaAnalysis(digest, text, features, state)
 

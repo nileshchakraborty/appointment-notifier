@@ -26,10 +26,50 @@ def test_portal_layout_rejects_ghost_screenshot(tmp_path, monkeypatch):
     monkeypatch.setattr(
         PortalMediaAnalyzer,
         "_ocr",
-        staticmethod(lambda path: "Calendar HYDERABAD VAC ghost slots no time submit disabled"),
+        staticmethod(lambda path: "Calendar HYDERABAD VAC no time submit disabled"),
     )
 
     assert PortalMediaAnalyzer().analyze(image).portal_state == "ghost_or_unbookable"
+
+
+def test_portal_layout_detects_potential_ghost_screenshot(tmp_path, monkeypatch):
+    image = tmp_path / "portal.png"
+    image.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        PortalMediaAnalyzer,
+        "_ocr",
+        staticmethod(lambda path: "Schedule OFC Appointment ghost slot 09:00"),
+    )
+
+    assert PortalMediaAnalyzer().analyze(image).portal_state == "potential_ghost"
+
+
+def test_portal_layout_detects_partial_ofc_only(tmp_path, monkeypatch):
+    image = tmp_path / "portal.png"
+    image.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        PortalMediaAnalyzer,
+        "_ocr",
+        staticmethod(lambda path: "Schedule OFC Appointment Chennai VAC availability: 15"),
+    )
+
+    result = PortalMediaAnalyzer().analyze(image)
+    assert result.portal_state == "partial_ofc_only"
+    assert result.features["has_ofc"] is True
+    assert result.features["has_consular"] is False
+
+
+def test_portal_layout_detects_mobile_crop_with_positive_count(tmp_path, monkeypatch):
+    image = tmp_path / "portal.png"
+    image.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        PortalMediaAnalyzer,
+        "_ocr",
+        staticmethod(lambda path: "Calendar 10/12/2026 availability 4"),
+    )
+
+    result = PortalMediaAnalyzer().analyze(image)
+    assert result.portal_state == "bookable"
 
 
 def test_media_staging_selects_first_writable_candidate(tmp_path):
