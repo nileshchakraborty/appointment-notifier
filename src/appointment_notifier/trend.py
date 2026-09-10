@@ -27,6 +27,13 @@ class TrendReport:
     matching_posts: int
     bulk_release_posts: int
     individual_availability_posts: int
+    last_bulk_release: str | None
+    last_individual_availability: str | None
+    bulk_release_events: int
+    bulk_median_gap_days: float | None
+    next_bulk_predicted: str | None
+    next_bulk_window_start: str | None
+    next_bulk_window_end: str | None
     legacy_posts: int
     unbookable_posts: int
     na_heartbeat_posts: int
@@ -74,6 +81,13 @@ class TrendAnalyzer:
                 matching_posts=0,
                 bulk_release_posts=0,
                 individual_availability_posts=0,
+                last_bulk_release=None,
+                last_individual_availability=None,
+                bulk_release_events=0,
+                bulk_median_gap_days=None,
+                next_bulk_predicted=None,
+                next_bulk_window_start=None,
+                next_bulk_window_end=None,
                 legacy_posts=0,
                 unbookable_posts=int((summary or {}).get("unbookable", 0)),
                 na_heartbeat_posts=int((summary or {}).get("na_heartbeat", 0)),
@@ -96,6 +110,34 @@ class TrendAnalyzer:
         categories = [str(row.get("category") or "unknown") for row in rows if _parse_datetime(str(row.get("sent_at") or "")) is not None]
         bulk_posts = sum(category == "bulk_release" for category in categories)
         individual_posts = sum(category == "individual_availability" for category in categories)
+        dated_rows = [
+            (_parse_datetime(str(row.get("sent_at") or "")), str(row.get("category") or ""))
+            for row in rows
+        ]
+        last_bulk = max((point for point, category in dated_rows if point and category == "bulk_release"), default=None)
+        last_individual = max((point for point, category in dated_rows if point and category == "individual_availability"), default=None)
+        bulk_points = sorted(point for point, category in dated_rows if point and category == "bulk_release")
+        bulk_clusters: list[list[datetime]] = []
+        for point in bulk_points:
+            if not bulk_clusters or point - bulk_clusters[-1][-1] > self.event_gap:
+                bulk_clusters.append([point])
+            else:
+                bulk_clusters[-1].append(point)
+        bulk_starts = [cluster[0] for cluster in bulk_clusters]
+        bulk_gaps = [
+            (current - previous).total_seconds() / 86400
+            for previous, current in zip(bulk_starts, bulk_starts[1:])
+        ][-12:]
+        bulk_median_gap = statistics.median(bulk_gaps) if bulk_gaps else None
+        next_bulk = bulk_start = bulk_end = None
+        if bulk_median_gap is not None:
+            bulk_low, bulk_high = _prediction_bounds(bulk_gaps)
+            next_bulk_dt = bulk_starts[-1] + timedelta(days=bulk_median_gap)
+            bulk_start_dt = bulk_starts[-1] + timedelta(days=bulk_low)
+            bulk_end_dt = bulk_starts[-1] + timedelta(days=bulk_high)
+            next_bulk = next_bulk_dt.astimezone(self.local_tz).isoformat(timespec="minutes")
+            bulk_start = bulk_start_dt.astimezone(self.local_tz).isoformat(timespec="minutes")
+            bulk_end = bulk_end_dt.astimezone(self.local_tz).isoformat(timespec="minutes")
         legacy_posts = sum(category == "legacy" for category in categories)
         ocr_evidence = tuple(
             text[:280].replace("\n", " ")
@@ -149,6 +191,13 @@ class TrendAnalyzer:
             matching_posts=len(points),
             bulk_release_posts=bulk_posts,
             individual_availability_posts=individual_posts,
+            last_bulk_release=last_bulk.astimezone(self.local_tz).isoformat(timespec="minutes") if last_bulk else None,
+            last_individual_availability=last_individual.astimezone(self.local_tz).isoformat(timespec="minutes") if last_individual else None,
+            bulk_release_events=len(bulk_clusters),
+            bulk_median_gap_days=round(float(bulk_median_gap), 2) if bulk_median_gap is not None else None,
+            next_bulk_predicted=next_bulk,
+            next_bulk_window_start=bulk_start,
+            next_bulk_window_end=bulk_end,
             legacy_posts=legacy_posts,
             unbookable_posts=int((summary or {}).get("unbookable", 0)),
             na_heartbeat_posts=int((summary or {}).get("na_heartbeat", 0)),
@@ -181,8 +230,20 @@ class TrendService:
         self.llm_client = llm_client or build_llm_client(settings)
 
     def report(self) -> TrendReport:
+        snapshot = self.store.latest_trend_snapshot()
+        if snapshot:
+            try:
+                return TrendReport(**snapshot)
+            except (TypeError, ValueError):
+                LOGGER.warning("Ignoring invalid persisted trend snapshot")
         rows, source = self.store.trend_points()
         return TrendAnalyzer(self.settings.timezone).analyze(rows, source, self.store.classification_summary())
+
+    def refresh_snapshot(self) -> TrendReport:
+        rows, source = self.store.trend_points()
+        report = TrendAnalyzer(self.settings.timezone).analyze(rows, source, self.store.classification_summary())
+        self.store.save_trend_snapshot(report.as_dict(), source=source)
+        return report
 
     def summarize(self, use_llm: bool = True) -> str:
         report = self.report()
@@ -219,6 +280,17 @@ def format_report(report: TrendReport) -> str:
         f"Excluded: {report.unbookable_posts} invalid/unbookable; {report.na_heartbeat_posts} NA heartbeats; {report.unknown_image_posts} unclassified images",
         f"Range: {report.first_post} to {report.last_post}",
     ]
+    if report.last_bulk_release:
+        lines.append(f"Last bulk release post: {report.last_bulk_release}")
+    if report.last_individual_availability:
+        lines.append(f"Last individual availability post: {report.last_individual_availability}")
+    if report.bulk_release_events:
+        lines.append(f"Bulk history: {report.bulk_release_events} release events")
+    if report.next_bulk_predicted:
+        lines.append(f"Next bulk-release statistical center: {report.next_bulk_predicted}")
+        lines.append(f"Bulk historical window: {report.next_bulk_window_start} to {report.next_bulk_window_end}")
+    elif report.bulk_release_events < 2:
+        lines.append("Bulk forecast: insufficient historical bulk-release events for a cadence estimate")
     if report.events_per_week is not None and report.median_gap_days is not None:
         lines.append(f"Frequency: {report.events_per_week:g} events/week; median gap {report.median_gap_days:g} days")
     elif report.events_per_week is not None:

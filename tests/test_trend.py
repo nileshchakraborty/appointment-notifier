@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from appointment_notifier.trend import TrendAnalyzer, format_report
-from appointment_notifier.models import SlotSignal, TelegramMessage
+from appointment_notifier.models import Alert, SlotSignal, TelegramMessage
 from appointment_notifier.store import AlertStore
 from appointment_notifier.parser import VisaSlotParser
 
@@ -40,6 +40,26 @@ def test_report_separates_bulk_from_individual_posts() -> None:
 
     assert report.bulk_release_posts == 1
     assert report.individual_availability_posts == 1
+    assert report.last_bulk_release is not None
+    assert report.last_individual_availability is not None
+    assert "Last bulk release post:" in format_report(report)
+
+
+def test_bulk_forecast_uses_bulk_history_only() -> None:
+    start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = [
+        _row(1, start, "bulk_release"),
+        _row(2, start + timedelta(days=7), "bulk_release"),
+        _row(3, start + timedelta(days=14), "bulk_release"),
+        _row(4, start + timedelta(days=20), "individual_availability"),
+    ]
+
+    report = TrendAnalyzer().analyze(rows, "classified observations")
+
+    assert report.bulk_release_events == 3
+    assert report.bulk_median_gap_days == 7
+    assert report.next_bulk_predicted.startswith("2026-07-22")
+    assert "Next bulk-release statistical center:" in format_report(report)
     assert "bulk-release posts" in format_report(report)
 
 
@@ -91,6 +111,34 @@ def test_legacy_bulk_alerts_are_backclassified(tmp_path) -> None:
     rows, _ = store.trend_points()
 
     assert rows[0]["category"] == "bulk_release"
+
+
+def test_alert_dedupe_check_does_not_reserve_before_delivery(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    message = TelegramMessage(1, "H1B slots available", datetime.now(timezone.utc))
+    assert store.is_new(message)
+    assert store.is_new(message)
+    alert = Alert("title", "body", "source", 1, message.sent_at)
+    store.record_alert(message, alert)
+    assert not store.is_new(message)
+    edited = TelegramMessage(1, "H1B many slots available", message.sent_at)
+    assert not store.is_new(edited)
+
+
+def test_trend_snapshot_round_trips_for_query_time_reads(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    payload = {"data_source": "backfill", "matching_posts": 0}
+    store.save_trend_snapshot(payload)
+    assert store.latest_trend_snapshot() == payload
+
+
+def test_canonical_messages_are_scoped_by_source_chat(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    first = TelegramMessage(7, "one", datetime.now(timezone.utc), source_chat_id="chat-a")
+    second = TelegramMessage(7, "two", datetime.now(timezone.utc), source_chat_id="chat-b")
+    store.record_telegram_message(first)
+    store.record_telegram_message(second)
+    assert store.conn.execute("select count(*) from telegram_messages").fetchone()[0] == 2
 
 
 def test_reclassifies_pre_category_observations(tmp_path) -> None:

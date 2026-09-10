@@ -36,15 +36,23 @@ class CompositeNotifier(Notifier):
             return
 
         delivered = False
+        failures = []
         for notifier in self.notifiers:
             if alert.silent and not notifier.supports_silent:
                 LOGGER.info("Skipping %s for silent alert", notifier.__class__.__name__)
                 continue
-            notifier.send(alert)
+            try:
+                notifier.send(alert)
+            except Exception as exc:  # one channel must not block all others
+                failures.append((notifier.__class__.__name__, exc))
+                LOGGER.exception("Notifier %s failed", notifier.__class__.__name__)
+                continue
             delivered = True
 
         if not delivered:
             LOGGER.warning("No compatible notifiers delivered alert: %s", alert.title)
+            if failures:
+                raise RuntimeError("all eligible notifiers failed") from failures[0][1]
 
 
 class EmailNotifier(Notifier):
@@ -122,6 +130,10 @@ class TelegramBotNotifier(Notifier):
                     exc.code,
                     err_body,
                 )
+                raise
+            except urllib.error.URLError:
+                LOGGER.exception("Telegram Bot send failed for chat_id=%s", chat_id)
+                raise
 
 
 class TwilioSmsNotifier(Notifier):

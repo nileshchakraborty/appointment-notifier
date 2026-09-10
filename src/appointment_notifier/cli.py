@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 
 from .app import AppointmentNotifierApp
+from .backfill import add_arguments as add_backfill_arguments, backfill
 from .chat import OllamaChatService
 from .config import load_settings
 from .models import Alert
@@ -31,6 +32,8 @@ def main(argv: list[str] | None = None) -> None:
     trend.add_argument("--json", action="store_true", help="Print deterministic statistics as JSON.")
     ask = subparsers.add_parser("ask", help="Ask the local appointment assistant a question.")
     ask.add_argument("question")
+    backfill_parser = subparsers.add_parser("backfill", help="Import Telegram history, OCR images, and classify locally.")
+    add_backfill_arguments(backfill_parser)
 
     args = parser.parse_args(argv)
 
@@ -44,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"visa_terms={','.join(signal.visa_terms)}")
         return
 
-    settings = load_settings(require_telegram=args.command == "run")
+    settings = load_settings(require_telegram=args.command in {"run", "backfill"})
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -65,6 +68,28 @@ def main(argv: list[str] | None = None) -> None:
                 print(json.dumps(service.report().as_dict(), indent=2))
             else:
                 print(service.summarize(use_llm=not args.no_llm))
+        finally:
+            store.close()
+        return
+
+    if args.command == "backfill":
+        store = AlertStore(settings.sqlite_path)
+        try:
+            stats = run_async(backfill(
+                api_id=settings.telegram.api_id,
+                api_hash=settings.telegram.api_hash,
+                session_path=str(settings.telegram.session_path),
+                chats=tuple(args.chats or settings.telegram.source_chats),
+                store=store,
+                parser=VisaSlotParser(settings.required_terms, settings.suppress_terms),
+                media_dirs=settings.media_temp_dirs,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                all_dialogs=args.all_chats,
+            ))
+            if not args.dry_run:
+                TrendService(store, settings.trend).refresh_snapshot()
+            print(json.dumps(stats, sort_keys=True))
         finally:
             store.close()
         return

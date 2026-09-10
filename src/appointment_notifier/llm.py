@@ -65,6 +65,21 @@ class FallbackLlmClient:
                 LOGGER.warning("LLM provider %s failed: %s", provider.name, exc)
         raise LlmProviderError("all configured providers failed: " + "; ".join(failures))
 
+    def health(self) -> dict[str, str]:
+        """Return a non-generative connectivity check for each configured provider."""
+        statuses: dict[str, str] = {}
+        for provider in self.providers:
+            checker = getattr(provider, "health", None)
+            if checker is None:
+                statuses[provider.name] = "configured"
+                continue
+            try:
+                checker()
+                statuses[provider.name] = "connected"
+            except Exception as exc:
+                statuses[provider.name] = f"unavailable ({exc})"
+        return statuses
+
 
 class OllamaProvider:
     def __init__(
@@ -114,6 +129,12 @@ class OllamaProvider:
             raise LlmProviderError("empty response")
         return content
 
+    def health(self) -> None:
+        headers = {}
+        if self.api_key_file:
+            headers["Authorization"] = "Bearer " + _read_secret(self.api_key_file)
+        _request_health(self.url + "/api/tags", headers, timeout=5)
+
 
 class NvidiaNimProvider:
     name = "nvidia"
@@ -159,6 +180,10 @@ class NvidiaNimProvider:
         if not content:
             raise LlmProviderError("empty response")
         return content
+
+    def health(self) -> None:
+        headers = {"Authorization": "Bearer " + _read_secret(self.api_key_file)}
+        _request_health(self.url + "/v1/models", headers, timeout=min(self.timeout_seconds, 5))
 
 
 def build_llm_client(settings: TrendSettings) -> FallbackLlmClient:
@@ -232,3 +257,13 @@ def _request_json(
                 continue
             raise LlmProviderError(f"HTTP {exc.code}") from exc
     raise LlmProviderError("request retry exhausted")
+
+
+def _request_health(url: str, headers: dict[str, str], *, timeout: int) -> None:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status >= 400:
+                raise LlmProviderError(f"HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        raise LlmProviderError(f"HTTP {exc.code}") from exc

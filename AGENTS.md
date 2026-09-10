@@ -61,6 +61,8 @@ Service hostnames and direct fallbacks:
 - OpenWA: `openwa.rpi.home.arpa` or `rpi.local:8081/dashboard/`
 - Pi-hole: `pihole.rpi.home.arpa/admin/` or `rpi.local:3000/admin/`
 - Streambert TV: `streambert-tv.rpi.home.arpa` or `rpi.local:8090`
+- Streambert Fire TV APK: `rpi.local/firestick/streambert.apk` (proxied to the
+  Streambert service; also linked from the root dashboard)
 
 The `.home.arpa` names are served by Pi-hole. `rpi.local` is mDNS and should
 remain usable even when a client has not configured Pi-hole DNS. If a client
@@ -141,6 +143,11 @@ gateway hostname.
   direct `rpi.local:<port>` fallbacks for devices without Pi-hole DNS.
 - Added a responsive, dependency-free quick-links table with clickable primary
   and fallback URLs.
+- Added a root-dashboard Fire TV installer link and a narrow `/firestick/*`
+  Caddy proxy to Streambert, keeping APK delivery within the existing gateway.
+- Caddy's configuration is mounted as an individual file. Validate candidates
+  first, then force-recreate only `rpi-caddy` after replacing that file; a
+  reload without recreation can retain the old bind-mounted inode.
 - Added OpenSSL local CA/leaf certificates and a daily root cron renewal check
   that renews the leaf when fewer than 30 days remain and restarts Caddy.
 - Recreated Pi-hole after environment-password changes so its configured admin

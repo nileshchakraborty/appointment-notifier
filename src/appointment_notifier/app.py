@@ -36,10 +36,11 @@ class AppointmentNotifierApp:
             LOGGER.info("Reclassified %s historical observations", reclassified)
 
     async def handle_message(self, message: TelegramMessage) -> None:
+        self.store.record_telegram_message(message)
         ocr_text = ""
         portal_state = None
         if message.image_path:
-            analysis = self.media_analyzer.analyze(message.image_path)
+            analysis = await asyncio.to_thread(self.media_analyzer.analyze, message.image_path)
             cached = self.store.get_media_analysis(analysis.sha256)
             if cached:
                 ocr_text = str(cached.get("ocr_text") or "")
@@ -64,13 +65,17 @@ class AppointmentNotifierApp:
         alert = self._build_alert(message, signal)
         self.store.set_availability(True, message, signal.reason, alert)
 
-        if not self.store.is_new(message):
+        if self.store.has_alert(message):
             LOGGER.info("Message %s already alerted", message.message_id)
             return
 
-        self.store.record_alert(message, alert)
         LOGGER.info("Sending alert for Telegram message %s", message.message_id)
-        self.notifier.send(alert)
+        try:
+            await asyncio.to_thread(self.notifier.send, alert)
+        except Exception:
+            LOGGER.exception("Alert delivery failed for Telegram message %s; leaving it retryable", message.message_id)
+            return
+        self.store.record_alert(message, alert)
 
     async def run(self) -> None:
         watcher = TelegramWatcher(
@@ -94,9 +99,22 @@ class AppointmentNotifierApp:
             trend_service=trend_service,
             chat_service=chat_service,
         )
+        async def supervise(name, runner):
+            backoff = 1
+            while True:
+                try:
+                    await runner()
+                    backoff = 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOGGER.exception("%s stopped unexpectedly; restarting in %ss", name, backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+
         await asyncio.gather(
-            watcher.run(self.settings.telegram.history_limit, self.handle_message),
-            bot_listener.run(),
+            supervise("Telegram watcher", lambda: watcher.run(self.settings.telegram.history_limit, self.handle_message)),
+            supervise("Telegram bot listener", bot_listener.run),
         )
 
     def _build_alert(self, message: TelegramMessage, signal: SlotSignal) -> Alert:
@@ -107,6 +125,10 @@ class AppointmentNotifierApp:
             body_parts.append("Silent informational alert.")
         if signal.category == "bulk_release":
             body_parts.append("Bulk appointment release detected.")
+        elif signal.category == "ofc_only":
+            body_parts.append("OFC / Biometrics slot availability detected (Consular slots may not be open yet or this is a Dropbox opening).")
+        elif signal.category == "potential_ghost":
+            body_parts.append("⚠️ Potential Ghost Slot / Unverified Report: This slot opening was reported as a potential ghost slot or unverified listing. Proceed with caution on the portal.")
         elif signal.category == "individual_availability":
             body_parts.append("Individual availability report detected.")
         if text:
@@ -116,10 +138,18 @@ class AppointmentNotifierApp:
         body_parts.extend(["", f"Source: {source}"])
         if message.sent_at:
             body_parts.append(f"Telegram time: {message.sent_at.isoformat()}")
+
+        if signal.category == "bulk_release":
+            title = "Bulk visa appointment release may be available"
+        elif signal.category == "ofc_only":
+            title = "📌 OFC / Biometrics visa appointment slot may be available"
+        elif signal.category == "potential_ghost":
+            title = "⚠️ Potential Ghost Slot / Unverified visa appointment report"
+        else:
+            title = "Visa appointment slot may be available"
+
         return Alert(
-            title=("Bulk visa appointment release may be available"
-                   if signal.category == "bulk_release"
-                   else "Visa appointment slot may be available"),
+            title=title,
             body="\n".join(part for part in body_parts if part is not None),
             source=source,
             message_id=message.message_id,

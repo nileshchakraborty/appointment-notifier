@@ -57,7 +57,7 @@ class TelegramWatcher:
                 try:
                     downloaded = await client.download_media(message, file=path)
                     path = str(downloaded) if downloaded else None
-                except (OSError, RuntimeError) as exc:
+                except Exception as exc:
                     LOGGER.warning("Unable to download Telegram image %s: %s", message.id, exc)
                     path = None
         try:
@@ -84,6 +84,7 @@ def _to_model(message, channel: str, image_path: str | None = None) -> TelegramM
         url=f"https://t.me/{url_channel}/{message_id}" if url_channel else None,
         has_image=_has_image(message),
         image_path=image_path,
+        source_chat_id=channel,
     )
 
 

@@ -50,11 +50,12 @@ class AlertStore:
             self.conn.execute(
                 """
                 insert into observed_messages
-                  (message_id, text, sent_at, source, has_image, matched, reason,
+                  (message_id, source_chat_id, text, sent_at, source, has_image, matched, reason,
                    silent, available_state, category, ocr_text, portal_state, locations, visa_terms)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(message_id) do update set
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(source_chat_id, message_id) do update set
                   text = excluded.text,
+                  source_chat_id = excluded.source_chat_id,
                   sent_at = excluded.sent_at,
                   source = excluded.source,
                   has_image = excluded.has_image,
@@ -70,6 +71,7 @@ class AlertStore:
                 """,
                 (
                     message.message_id,
+                    message.source_chat_id,
                     message.text,
                     message.sent_at.isoformat() if message.sent_at else None,
                     message.url,
@@ -79,12 +81,38 @@ class AlertStore:
                     1 if signal.silent else 0,
                     None if signal.available_state is None else (1 if signal.available_state else 0),
                     signal.category,
-                    signal.ocr_text,
-                    signal.portal_state,
+                    getattr(signal, "ocr_text", ""),
+                    getattr(signal, "portal_state", None),
                     json.dumps(signal.locations),
                     json.dumps(signal.visa_terms),
                 ),
             )
+
+    def record_telegram_message(self, message: TelegramMessage, *, media_sha256: str | None = None) -> None:
+        """Persist raw canonical source metadata before deriving a classification."""
+        with self.conn:
+            self.conn.execute(
+                """
+                insert into telegram_messages
+                  (chat_id, message_id, text, sent_at, source, has_image, media_sha256)
+                values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(chat_id, message_id) do update set
+                  text = excluded.text, sent_at = excluded.sent_at,
+                  source = excluded.source, has_image = excluded.has_image,
+                  media_sha256 = coalesce(excluded.media_sha256, telegram_messages.media_sha256),
+                  updated_at = current_timestamp
+                """,
+                (message.source_chat_id, message.message_id, message.text,
+                 message.sent_at.isoformat() if message.sent_at else None,
+                 message.url, 1 if message.has_image else 0, media_sha256),
+            )
+
+    def set_backfill_cursor(self, chat_id: str, message_id: int | None) -> None:
+        self.set_state(f"backfill:{chat_id}", "" if message_id is None else str(message_id))
+
+    def backfill_cursor(self, chat_id: str) -> int | None:
+        value = self.get_state(f"backfill:{chat_id}")
+        return int(value) if value and value.isdigit() else None
 
     def get_media_analysis(self, sha256: str) -> dict[str, object] | None:
         row = self.conn.execute("select * from media_analysis where sha256 = ?", (sha256,)).fetchone()
@@ -107,7 +135,7 @@ class AlertStore:
     def reclassify_observations(self, parser) -> int:
         """Upgrade rows written before category-aware parsing was introduced."""
         rows = self.conn.execute(
-            "select message_id, text, has_image from observed_messages where category = 'unknown'"
+            "select message_id, source_chat_id, text, has_image from observed_messages where category = 'unknown'"
         ).fetchall()
         with self.conn:
             for row in rows:
@@ -117,7 +145,7 @@ class AlertStore:
                     update observed_messages
                     set matched = ?, reason = ?, silent = ?, available_state = ?,
                         category = ?, locations = ?, visa_terms = ?
-                    where message_id = ?
+                    where source_chat_id = ? and message_id = ?
                     """,
                     (
                         1 if signal.matched else 0,
@@ -127,7 +155,7 @@ class AlertStore:
                         signal.category,
                         json.dumps(signal.locations),
                         json.dumps(signal.visa_terms),
-                        row["message_id"],
+                        row["source_chat_id"], row["message_id"],
                     ),
                 )
         return len(rows)
@@ -141,7 +169,19 @@ class AlertStore:
             order by sent_at
             """
         ).fetchall()
-        first_matched_at = str(observed[0]["sent_at"]) if observed else None
+        external = self.conn.execute(
+            """
+            select source_message_id as message_id, observed_at as sent_at,
+                   claim as text, source_url as source, 0 as has_image,
+                   'bulk_release' as category, '' as ocr_text, '' as portal_state,
+                   '[]' as locations, '[]' as visa_terms
+            from external_evidence
+            where used_for_forecast = 1 and source_message_id is not null and observed_at is not null
+            order by observed_at
+            """
+        ).fetchall()
+        first_values = [str(row["sent_at"]) for row in (*observed, *external) if row["sent_at"]]
+        first_matched_at = min(first_values) if first_values else None
         legacy_query = """
             select message_id, sent_at, body as text, source, 0 as has_image,
                    'legacy' as category, '' as ocr_text, '' as portal_state, '[]' as locations, '[]' as visa_terms
@@ -162,9 +202,11 @@ class AlertStore:
             if signal.matched:
                 item["category"] = signal.category
             legacy_rows.append(item)
-        combined = legacy_rows + [dict(row) for row in observed]
+        combined = legacy_rows + [dict(row) for row in observed] + [dict(row) for row in external]
         combined.sort(key=lambda row: str(row.get("sent_at") or ""))
-        if observed and legacy:
+        if external:
+            source = "classified observations with verified external evidence"
+        elif observed and legacy:
             source = "classified observations with legacy baseline"
         elif observed:
             source = "classified observations"
@@ -179,7 +221,27 @@ class AlertStore:
             query += " where sent_at >= ?"
             params = (since,)
         query += " group by category"
-        return {str(row["category"]): int(row["count"]) for row in self.conn.execute(query, params)}
+        summary = {str(row["category"]): int(row["count"]) for row in self.conn.execute(query, params)}
+        # Include pre-observation alerts in exclusion counts. Older databases
+        # have useful history only in ``alerts`` and otherwise make /trend
+        # report an artificially clean dataset.
+        observed_ids = {
+            int(row["message_id"])
+            for row in self.conn.execute("select message_id from observed_messages")
+        }
+        legacy_query = "select message_id, body, sent_at from alerts where title is not null"
+        legacy_params: tuple[object, ...] = ()
+        if since:
+            legacy_query += " and sent_at >= ?"
+            legacy_params = (since,)
+        parser = VisaSlotParser()
+        for row in self.conn.execute(legacy_query, legacy_params):
+            if int(row["message_id"]) in observed_ids:
+                continue
+            signal = parser.parse(str(row["body"] or ""))
+            if signal.category:
+                summary[signal.category] = summary.get(signal.category, 0) + 1
+        return summary
 
     def recent_chat_messages(self, chat_id: str, limit: int) -> list[dict[str, str]]:
         rows = self.conn.execute(
@@ -234,24 +296,34 @@ class AlertStore:
             )
         return cursor.rowcount
 
-    def is_new(self, message: TelegramMessage) -> bool:
+    def has_alert(self, message: TelegramMessage) -> bool:
         digest = self._digest(message)
-        with self.conn:
-            cursor = self.conn.execute(
-                "insert or ignore into alerts (digest, message_id) values (?, ?)",
-                (digest, message.message_id),
-            )
-        return cursor.rowcount == 1
+        # Telegram message edits retain the same message id but change text;
+        # do not notify repeatedly for every edited copy.
+        row = self.conn.execute(
+            "select 1 from alerts where digest = ? or (source_chat_id = ? and message_id = ?)",
+            (digest, message.source_chat_id, message.message_id),
+        ).fetchone()
+        return row is not None
+
+    def is_new(self, message: TelegramMessage) -> bool:
+        """Backward-compatible read-only dedupe check.
+
+        Reservation before delivery loses alerts permanently when a notifier
+        fails.  Callers should record the alert only after successful delivery.
+        """
+        return not self.has_alert(message)
 
     def record_alert(self, message: TelegramMessage, alert: Alert) -> None:
         digest = self._digest(message)
         with self.conn:
             self.conn.execute(
                 """
-                insert into alerts (digest, message_id, title, body, source, sent_at, silent)
-                values (?, ?, ?, ?, ?, ?, ?)
+                insert into alerts (digest, message_id, source_chat_id, title, body, source, sent_at, silent)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(digest) do update set
                   title = excluded.title,
+                  source_chat_id = excluded.source_chat_id,
                   body = excluded.body,
                   source = excluded.source,
                   sent_at = excluded.sent_at,
@@ -260,6 +332,7 @@ class AlertStore:
                 (
                     digest,
                     message.message_id,
+                    message.source_chat_id,
                     alert.title,
                     alert.body,
                     alert.source,
@@ -284,6 +357,49 @@ class AlertStore:
     def get_state(self, key: str) -> str | None:
         row = self.conn.execute("select value from bot_state where key = ?", (key,)).fetchone()
         return str(row["value"]) if row else None
+
+    def save_trend_snapshot(self, report: dict[str, object], *, source: str = "backfill") -> None:
+        with self.conn:
+            self.conn.execute(
+                "insert into trend_snapshots (source, report_json) values (?, ?)",
+                (source, json.dumps(report, sort_keys=True)),
+            )
+
+    def latest_trend_snapshot(self) -> dict[str, object] | None:
+        row = self.conn.execute(
+            "select report_json from trend_snapshots order by id desc limit 1"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            value = json.loads(str(row["report_json"]))
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def record_external_evidence(self, *, source_url: str, source_type: str, claim: str,
+                                 appointment_type: str, location: str | None,
+                                 verification_status: str, used_for_forecast: bool = False,
+                                 source_message_id: int | None = None,
+                                 observed_at: str | None = None) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                insert into external_evidence
+                  (source_url, source_type, claim, appointment_type, location,
+                   verification_status, used_for_forecast, source_message_id, observed_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(source_url, claim) do update set
+                  verification_status = excluded.verification_status,
+                  used_for_forecast = excluded.used_for_forecast,
+                  source_message_id = excluded.source_message_id,
+                  observed_at = excluded.observed_at,
+                  updated_at = current_timestamp
+                """,
+                (source_url, source_type, claim, appointment_type, location,
+                 verification_status, 1 if used_for_forecast else 0,
+                 source_message_id, observed_at),
+            )
 
     def set_state(self, key: str, value: str) -> None:
         with self.conn:
@@ -448,7 +564,7 @@ class AlertStore:
     @staticmethod
     def _digest(message: TelegramMessage) -> str:
         normalized = " ".join(message.text.lower().split())
-        key = f"{message.message_id}:{normalized}"
+        key = f"{message.source_chat_id}:{message.message_id}:{normalized}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def _migrate_alert_columns(self) -> None:
@@ -457,6 +573,7 @@ class AlertStore:
             for row in self.conn.execute("pragma table_info(alerts)").fetchall()
         }
         migrations = {
+            "source_chat_id": "alter table alerts add column source_chat_id text not null default 'legacy'",
             "title": "alter table alerts add column title text",
             "body": "alter table alerts add column body text",
             "source": "alter table alerts add column source text",
@@ -511,10 +628,51 @@ class AlertStore:
 
     def _init_observations(self) -> None:
         with self.conn:
+            existing = self.conn.execute("pragma table_info(observed_messages)").fetchall()
+            if existing and any(row[1] == "message_id" and row[5] == 1 for row in existing):
+                self.conn.execute("alter table observed_messages rename to observed_messages_legacy")
+                legacy_columns = {row[1] for row in self.conn.execute("pragma table_info(observed_messages_legacy)")}
+                for name, definition in {
+                    "category": "text not null default 'unknown'",
+                    "ocr_text": "text not null default ''",
+                    "portal_state": "text",
+                    "locations": "text not null default '[]'",
+                    "visa_terms": "text not null default '[]'",
+                }.items():
+                    if name not in legacy_columns:
+                        self.conn.execute(f"alter table observed_messages_legacy add column {name} {definition}")
+                self.conn.execute(
+                    """
+                    create table observed_messages (
+                      message_id integer not null,
+                      source_chat_id text not null default 'legacy',
+                      text text not null, sent_at text, source text,
+                      has_image integer not null default 0, matched integer not null,
+                      reason text not null, silent integer not null default 0,
+                      available_state integer, category text not null default 'unknown',
+                      ocr_text text not null default '', portal_state text,
+                      locations text not null default '[]', visa_terms text not null default '[]',
+                      created_at text not null default current_timestamp,
+                      primary key (source_chat_id, message_id)
+                    )
+                    """
+                )
+                self.conn.execute(
+                    """
+                    insert into observed_messages
+                    (message_id, source_chat_id, text, sent_at, source, has_image, matched,
+                     reason, silent, available_state, category, ocr_text, portal_state, locations, visa_terms, created_at)
+                    select message_id, 'legacy', text, sent_at, source, has_image, matched,
+                           reason, silent, available_state, category, ocr_text, portal_state, locations, visa_terms, created_at
+                    from observed_messages_legacy
+                    """
+                )
+                self.conn.execute("drop table observed_messages_legacy")
             self.conn.execute(
                 """
                 create table if not exists observed_messages (
-                  message_id integer primary key,
+                  message_id integer not null,
+                  source_chat_id text not null default 'legacy',
                   text text not null,
                   sent_at text,
                   source text,
@@ -528,7 +686,8 @@ class AlertStore:
                   portal_state text,
                   locations text not null default '[]',
                   visa_terms text not null default '[]',
-                  created_at text not null default current_timestamp
+                  created_at text not null default current_timestamp,
+                  primary key (source_chat_id, message_id)
                 )
                 """
             )
@@ -539,6 +698,24 @@ class AlertStore:
                 self.conn.execute("alter table observed_messages add column ocr_text text not null default ''")
             if "portal_state" not in columns:
                 self.conn.execute("alter table observed_messages add column portal_state text")
+            if "source_chat_id" not in columns:
+                self.conn.execute("alter table observed_messages add column source_chat_id text not null default 'legacy'")
+            self.conn.execute(
+                """
+                create table if not exists telegram_messages (
+                  chat_id text not null,
+                  message_id integer not null,
+                  text text not null default '',
+                  sent_at text,
+                  source text,
+                  has_image integer not null default 0,
+                  media_sha256 text,
+                  created_at text not null default current_timestamp,
+                  updated_at text not null default current_timestamp,
+                  primary key (chat_id, message_id)
+                )
+                """
+            )
             self.conn.execute(
                 """
                 create table if not exists media_analysis (
@@ -564,6 +741,41 @@ class AlertStore:
                 )
                 """
             )
+
+            self.conn.execute(
+                """
+                create table if not exists trend_snapshots (
+                  id integer primary key,
+                  source text not null,
+                  report_json text not null,
+                  created_at text not null default current_timestamp
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                create table if not exists external_evidence (
+                  id integer primary key,
+                  source_url text not null,
+                  source_type text not null,
+                  claim text not null,
+                  appointment_type text not null,
+                  location text,
+                  verification_status text not null,
+                  used_for_forecast integer not null default 0,
+                  source_message_id integer,
+                  observed_at text,
+                  created_at text not null default current_timestamp,
+                  updated_at text not null default current_timestamp,
+                  unique(source_url, claim)
+                )
+                """
+            )
+            columns = {row[1] for row in self.conn.execute("pragma table_info(external_evidence)")}
+            if "source_message_id" not in columns:
+                self.conn.execute("alter table external_evidence add column source_message_id integer")
+            if "observed_at" not in columns:
+                self.conn.execute("alter table external_evidence add column observed_at text")
             self.conn.execute(
                 """
                 create index if not exists telegram_chat_messages_chat_id_id

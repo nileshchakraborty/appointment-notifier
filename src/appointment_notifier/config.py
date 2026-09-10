@@ -30,6 +30,7 @@ class TelegramSettings:
     api_hash: str
     session_path: Path
     channel: str
+    source_chats: tuple[str, ...]
     history_limit: int
 
 
@@ -91,6 +92,7 @@ class TrendSettings:
     chat_history_messages: int
     context_tokens: int
     response_tokens: int
+    chat_timeout_seconds: int = 150
     provider_order: tuple[str, ...] = ("nvidia", "ollama_cloud", "ollama")
     nvidia_enabled: bool = False
     nvidia_url: str = "https://integrate.api.nvidia.com"
@@ -132,6 +134,7 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             api_hash=api_hash,
             session_path=Path(os.getenv("TELEGRAM_SESSION_PATH", ".state/telegram.session")),
             channel=os.getenv("TELEGRAM_CHANNEL", "@Regular_H1B_H4_VisaSlotsChecking"),
+            source_chats=_csv("TELEGRAM_SOURCE_CHATS") or (os.getenv("TELEGRAM_CHANNEL", "@Regular_H1B_H4_VisaSlotsChecking"),),
             history_limit=_int("TELEGRAM_HISTORY_LIMIT", 25),
         ),
         telegram_alert=TelegramAlertSettings(
@@ -183,6 +186,7 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             chat_history_messages=_int("OLLAMA_CHAT_HISTORY_MESSAGES", 8),
             context_tokens=_int("OLLAMA_CONTEXT_TOKENS", 2048),
             response_tokens=_int("OLLAMA_RESPONSE_TOKENS", 220),
+            chat_timeout_seconds=_int("OLLAMA_CHAT_TIMEOUT_SECONDS", 150),
             provider_order=_csv("LLM_PROVIDER_ORDER")
             or ("nvidia", "ollama_cloud", "ollama"),
             nvidia_enabled=_bool("NVIDIA_NIM_ENABLED"),

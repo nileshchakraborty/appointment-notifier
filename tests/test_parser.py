@@ -119,14 +119,34 @@ def test_bulk_appointments_opened_is_loud():
     assert signal.category == "bulk_release"
 
 
-def test_ghost_and_partial_reports_are_not_available():
+def test_unbookable_reports_are_suppressed():
     ghost = VisaSlotParser().parse("Ghost slots every 30 mins with no time or submit buttons")
-    partial = VisaSlotParser().parse("OFC available but no consular")
+    broken = VisaSlotParser().parse("Submit button didn't work")
 
     assert ghost.category == "unbookable"
     assert ghost.matched is False
-    assert partial.category == "unbookable"
-    assert partial.matched is False
+    assert broken.category == "unbookable"
+    assert broken.matched is False
+
+
+def test_ofc_only_reports_match_with_category():
+    partial = VisaSlotParser().parse("OFC available but no consular")
+    only_ofc = VisaSlotParser().parse("Only Ofc Available")
+
+    assert partial.category == "ofc_only"
+    assert partial.matched is True
+    assert only_ofc.category == "ofc_only"
+    assert only_ofc.matched is True
+
+
+def test_potential_ghost_reports_match_with_category():
+    ghost_caption = VisaSlotParser().parse("Ghost slot I guess", has_image=True, ocr_text="Schedule OFC Appointment availability 5")
+    ghost_text = VisaSlotParser().parse("Ghost slot available in Chennai")
+
+    assert ghost_caption.category == "potential_ghost"
+    assert ghost_caption.matched is True
+    assert ghost_text.category == "potential_ghost"
+    assert ghost_text.matched is True
 
 
 def test_zero_width_spam_is_suppressed():
@@ -168,3 +188,34 @@ def test_unrelated_message_does_not_match():
     signal = VisaSlotParser().parse("Good morning everyone")
 
     assert signal.matched is False
+
+
+def test_configured_terms_match_words_not_substrings():
+    parser = VisaSlotParser(required_terms=("h1", "h1b"), suppress_terms=("na",))
+
+    assert parser.parse("Chennai H1B July available").matched is True
+    assert parser.parse("January H1B slots available").matched is True
+    assert parser.parse("NA").category == "na_heartbeat"
+
+
+def test_app_build_alert_titles_and_warning_bodies():
+    from datetime import datetime, timezone
+    from appointment_notifier.app import AppointmentNotifierApp
+    from appointment_notifier.models import TelegramMessage
+
+    app = type("DummyApp", (), {
+        "settings": type("Settings", (), {"telegram": type("TG", (), {"channel": "https://t.me/test"})()})(),
+        "_build_alert": AppointmentNotifierApp._build_alert,
+    })()
+
+    msg = TelegramMessage(101, "Ghost slot I guess", datetime.now(timezone.utc), url="https://t.me/test/101")
+    ghost_sig = VisaSlotParser().parse("Ghost slot I guess", has_image=True, ocr_text="Schedule OFC 10/12/2026 availability 5")
+    alert = app._build_alert(msg, ghost_sig)
+    assert "⚠️ Potential Ghost Slot" in alert.title
+    assert "⚠️ Potential Ghost Slot / Unverified Report" in alert.body
+
+    ofc_msg = TelegramMessage(102, "OFC available but no consular", datetime.now(timezone.utc), url="https://t.me/test/102")
+    ofc_sig = VisaSlotParser().parse("OFC available but no consular")
+    ofc_alert = app._build_alert(ofc_msg, ofc_sig)
+    assert "📌 OFC / Biometrics" in ofc_alert.title
+    assert "OFC / Biometrics slot availability detected" in ofc_alert.body

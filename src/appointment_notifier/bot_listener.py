@@ -14,6 +14,22 @@ from .trend import TrendService
 
 LOGGER = logging.getLogger(__name__)
 
+HELP_TEXT = (
+    "Commands:\n"
+    "/start - show this command list\n"
+    "/help - show this command list\n"
+    "/current - show whether the latest known state is available\n"
+    "/last - show previous availability timestamp\n"
+    "/status - show watcher status\n"
+    "/trend - summarize posting history and next likely window\n"
+    "/ask <question> - chat with the Pi-local appointment assistant\n"
+    "/forget - erase your saved conversation history\n"
+    "/whoami - show your Telegram identifiers\n"
+    "/users - list allowed users (owner only)\n"
+    "/allow <chat_id|@username> [owner] - add a user (owner only)\n"
+    "/revoke <chat_id|@username> - remove a non-owner user (owner only)"
+)
+
 
 class TelegramBotCommandListener:
     def __init__(
@@ -106,21 +122,9 @@ class TelegramBotCommandListener:
 
         command = text.split()[0].split("@")[0].lower()
         if command in {"/start", "/help"}:
-            response = (
-                "Commands:\n"
-                "/current - show whether the latest known state is available\n"
-                "/last - show previous availability timestamp\n"
-                "/status - show watcher status\n"
-                "/trend - summarize posting history and next likely window\n"
-                "/ask <question> - chat with the Pi-local appointment assistant\n"
-                "/forget - erase your saved conversation history\n"
-                "/whoami - show your Telegram identifiers\n"
-                "/users - list allowed users (owner only)\n"
-                "/allow <chat_id|@username> [owner] - add a user (owner only)\n"
-                "/revoke <chat_id|@username> - remove a non-owner user (owner only)"
-            )
+            response = HELP_TEXT
         elif command == "/status":
-            response = "Appointment notifier is running. Use /current or /last."
+            response = await self._format_status()
         elif command == "/trend":
             if self.trend_service is None:
                 response = "Trend analysis is not configured."
@@ -167,10 +171,44 @@ class TelegramBotCommandListener:
         if len(question) > 1500:
             return "Please keep each question under 1,500 characters."
         try:
-            return await self.chat_service.answer(chat_id, question)
+            service_settings = getattr(self.chat_service, "settings", None)
+            timeout = max(1, int(getattr(service_settings, "chat_timeout_seconds", 150)))
+            return await asyncio.wait_for(self.chat_service.answer(chat_id, question), timeout=timeout)
         except Exception:
             LOGGER.exception("Pi-local chat request failed")
             return "The Pi-local model is temporarily unavailable. Try again shortly or use /trend."
+
+    async def _format_status(self) -> str:
+        lines = ["System status:"]
+        try:
+            self.store.conn.execute("select 1").fetchone()
+            lines.append("Database: connected")
+        except Exception as exc:
+            lines.append(f"Database: unavailable ({exc})")
+
+        try:
+            telegram_result = await asyncio.wait_for(
+                asyncio.to_thread(self._api_json, "getMe", {}),
+                timeout=8,
+            )
+            if not telegram_result.get("ok"):
+                raise RuntimeError("Telegram API returned ok=false")
+            lines.append("Telegram Bot API: connected")
+        except Exception as exc:
+            lines.append(f"Telegram Bot API: unavailable ({type(exc).__name__})")
+
+        llm_client = getattr(self.chat_service, "llm_client", None)
+        if llm_client is None or not getattr(llm_client, "enabled", False):
+            lines.append("AI providers: not configured")
+        else:
+            try:
+                statuses = await asyncio.to_thread(llm_client.health)
+            except Exception as exc:
+                lines.append(f"AI providers: unavailable ({type(exc).__name__})")
+            else:
+                for provider, status in statuses.items():
+                    lines.append(f"AI {provider}: {status}")
+        return "\n".join(lines)
 
     def _format_current(self) -> str:
         state = self.store.availability_state()

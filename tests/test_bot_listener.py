@@ -107,3 +107,61 @@ def test_authorized_normal_text_routes_to_chat_and_replies(tmp_path):
     assert calls == [("1422400397", "When are appointments usually posted?")]
     assert sent["method"] == "sendMessage"
     assert sent["params"]["text"] == "Pi-local answer"
+
+
+def test_help_command_lists_supported_commands(tmp_path):
+    listener = _listener(tmp_path)
+    sent = {}
+    listener._api_json = lambda method, params: sent.update(method=method, params=params) or {}
+
+    asyncio.run(
+        listener._handle_update(
+            {
+                "message": {
+                    "chat": {"id": 1422400397},
+                    "from": {"username": "someone_else"},
+                    "text": "/help",
+                }
+            }
+        )
+    )
+
+    assert sent["method"] == "sendMessage"
+    response = sent["params"]["text"]
+    assert response.startswith("Commands:")
+    for command in (
+        "/current",
+        "/last",
+        "/status",
+        "/trend",
+        "/ask",
+        "/forget",
+        "/whoami",
+        "/users",
+        "/allow",
+        "/revoke",
+    ):
+        assert command in response
+
+
+def test_status_reports_backend_and_ai_health(tmp_path):
+    listener = _listener(tmp_path)
+
+    class FakeLlm:
+        enabled = True
+
+        def health(self):
+            return {"nvidia": "unavailable (HTTP 401)", "ollama": "connected"}
+
+    class FakeChat:
+        llm_client = FakeLlm()
+
+    listener.chat_service = FakeChat()
+    listener._api_json = lambda method, params: {"ok": True}
+
+    response = asyncio.run(listener._format_status())
+
+    assert "Database: connected" in response
+    assert "Telegram Bot API: connected" in response
+    assert "AI nvidia: unavailable (HTTP 401)" in response
+    assert "AI ollama: connected" in response
