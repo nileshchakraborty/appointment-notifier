@@ -51,6 +51,10 @@ class TrendReport:
     predicted_window_end: str | None
     confidence: str
     caveat: str
+    ofc_only_posts: int = 0
+    potential_ghost_posts: int = 0
+    last_ofc_only: str | None = None
+    last_potential_ghost: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -105,17 +109,25 @@ class TrendAnalyzer:
                 predicted_window_end=None,
                 confidence="insufficient data",
                 caveat=caveat,
+                ofc_only_posts=0,
+                potential_ghost_posts=0,
+                last_ofc_only=None,
+                last_potential_ghost=None,
             )
 
         categories = [str(row.get("category") or "unknown") for row in rows if _parse_datetime(str(row.get("sent_at") or "")) is not None]
         bulk_posts = sum(category == "bulk_release" for category in categories)
         individual_posts = sum(category == "individual_availability" for category in categories)
+        ofc_only_posts = sum(category == "ofc_only" for category in categories)
+        potential_ghost_posts = sum(category == "potential_ghost" for category in categories)
         dated_rows = [
             (_parse_datetime(str(row.get("sent_at") or "")), str(row.get("category") or ""))
             for row in rows
         ]
         last_bulk = max((point for point, category in dated_rows if point and category == "bulk_release"), default=None)
         last_individual = max((point for point, category in dated_rows if point and category == "individual_availability"), default=None)
+        last_ofc = max((point for point, category in dated_rows if point and category == "ofc_only"), default=None)
+        last_ghost = max((point for point, category in dated_rows if point and category == "potential_ghost"), default=None)
         bulk_points = sorted(point for point, category in dated_rows if point and category == "bulk_release")
         bulk_clusters: list[list[datetime]] = []
         for point in bulk_points:
@@ -215,6 +227,10 @@ class TrendAnalyzer:
             predicted_window_end=window_end,
             confidence=confidence,
             caveat=caveat,
+            ofc_only_posts=ofc_only_posts,
+            potential_ghost_posts=potential_ghost_posts,
+            last_ofc_only=last_ofc.astimezone(self.local_tz).isoformat(timespec="minutes") if last_ofc else None,
+            last_potential_ghost=last_ghost.astimezone(self.local_tz).isoformat(timespec="minutes") if last_ghost else None,
         )
 
 
@@ -273,10 +289,19 @@ class TrendService:
 def format_report(report: TrendReport) -> str:
     if report.matching_posts == 0:
         return "No matching historical appointment posts have been recorded yet."
+    type_parts = [
+        f"{report.bulk_release_posts} bulk-release posts",
+        f"{report.individual_availability_posts} individual availability reports",
+    ]
+    if report.ofc_only_posts:
+        type_parts.append(f"{report.ofc_only_posts} OFC/biometrics posts")
+    if report.potential_ghost_posts:
+        type_parts.append(f"{report.potential_ghost_posts} potential ghost slot reports")
+
     lines = [
         f"Trend ({report.timezone}, {report.confidence} confidence)",
         f"Data: {report.matching_posts} matching posts in {report.release_events} likely release events",
-        f"Types: {report.bulk_release_posts} bulk-release posts; {report.individual_availability_posts} individual availability reports",
+        f"Types: {'; '.join(type_parts)}",
         f"Excluded: {report.unbookable_posts} invalid/unbookable; {report.na_heartbeat_posts} NA heartbeats; {report.unknown_image_posts} unclassified images",
         f"Range: {report.first_post} to {report.last_post}",
     ]
@@ -284,6 +309,10 @@ def format_report(report: TrendReport) -> str:
         lines.append(f"Last bulk release post: {report.last_bulk_release}")
     if report.last_individual_availability:
         lines.append(f"Last individual availability post: {report.last_individual_availability}")
+    if report.last_ofc_only:
+        lines.append(f"Last OFC/biometrics post: {report.last_ofc_only}")
+    if report.last_potential_ghost:
+        lines.append(f"Last potential ghost slot post: {report.last_potential_ghost}")
     if report.bulk_release_events:
         lines.append(f"Bulk history: {report.bulk_release_events} release events")
     if report.next_bulk_predicted:

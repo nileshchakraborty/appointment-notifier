@@ -829,7 +829,16 @@ class AlertStore:
         ).fetchone()
         return row is not None
 
+    def optimize(self) -> None:
+        """Run SQLite index and query-planner optimization."""
+        try:
+            with self.conn:
+                self.conn.execute("PRAGMA optimize")
+        except Exception:
+            pass
+
     def close(self) -> None:
+        self.optimize()
         self.conn.close()
 
 

@@ -151,3 +151,27 @@ def test_reclassifies_pre_category_observations(tmp_path) -> None:
     assert store.reclassify_observations(VisaSlotParser()) == 1
     row = store.conn.execute("select matched, category from observed_messages where message_id = 1").fetchone()
     assert tuple(row) == (0, "unknown_image")
+
+
+def test_report_includes_ofc_and_ghost_categories() -> None:
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    rows = [
+        _row(1, now, "ofc_only"),
+        _row(2, now + timedelta(hours=1), "potential_ghost"),
+        _row(3, now + timedelta(hours=2), "individual_availability"),
+    ]
+    report = TrendAnalyzer().analyze(rows, "classified observations")
+    assert report.ofc_only_posts == 1
+    assert report.potential_ghost_posts == 1
+    assert report.individual_availability_posts == 1
+    text = format_report(report)
+    assert "1 OFC/biometrics posts" in text
+    assert "1 potential ghost slot reports" in text
+    assert "Last OFC/biometrics post:" in text
+    assert "Last potential ghost slot post:" in text
+
+
+def test_alert_store_optimize_runs_cleanly(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    store.optimize()
+    store.close()

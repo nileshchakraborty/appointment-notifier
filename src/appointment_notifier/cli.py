@@ -24,9 +24,13 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("run", help="Watch Telegram and send slot alerts.")
+    subparsers.add_parser("doctor", help="Run comprehensive system and connectivity diagnostics.")
     subparsers.add_parser("test-notify", help="Send a test alert through enabled notifiers.")
     parse_text = subparsers.add_parser("parse-text", help="Check how a Telegram message would be classified.")
     parse_text.add_argument("text")
+    parse_text.add_argument("--has-image", action="store_true", help="Simulate message with image attachment.")
+    parse_text.add_argument("--ocr-text", default="", help="Simulate OCR extracted text.")
+    parse_text.add_argument("--portal-state", default=None, help="Simulate portal layout state (e.g. bookable, partial_ofc_only, potential_ghost).")
     trend = subparsers.add_parser("trend", help="Analyze historical slot-posting trends.")
     trend.add_argument("--no-llm", action="store_true", help="Skip the optional Ollama summary.")
     trend.add_argument("--json", action="store_true", help="Print deterministic statistics as JSON.")
@@ -39,8 +43,16 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "parse-text":
         slot_parser = VisaSlotParser()
-        signal = slot_parser.parse(args.text)
-        print(f"matched={signal.matched} silent={signal.silent} reason={signal.reason}")
+        signal = slot_parser.parse(
+            args.text,
+            has_image=args.has_image,
+            ocr_text=args.ocr_text,
+            portal_state=args.portal_state,
+        )
+        print(f"matched={signal.matched} category={signal.category} silent={signal.silent} available_state={signal.available_state}")
+        print(f"reason={signal.reason}")
+        if signal.portal_state:
+            print(f"portal_state={signal.portal_state}")
         if signal.locations:
             print(f"locations={','.join(signal.locations)}")
         if signal.visa_terms:
@@ -48,6 +60,10 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     settings = load_settings(require_telegram=args.command in {"run", "backfill"})
+
+    if args.command == "doctor":
+        _run_doctor(settings)
+        return
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -129,6 +145,78 @@ def main(argv: list[str] | None = None) -> None:
         print("Stopped.", file=sys.stderr)
     finally:
         store.close()
+
+
+def _run_doctor(settings) -> None:
+    print("=== Appointment Notifier System Diagnostics ===")
+
+    # 1. Database Check
+    db_path = settings.sqlite_path
+    print(f"\n[Database] Path: {db_path}")
+    if db_path.exists():
+        try:
+            store = AlertStore(db_path)
+            store.optimize()
+            msg_count = store.conn.execute("select count(*) from observed_messages").fetchone()[0]
+            alert_count = store.conn.execute("select count(*) from alerts").fetchone()[0]
+            media_count = store.conn.execute("select count(*) from media_analysis").fetchone()[0]
+            user_count = store.bot_user_count()
+            store.close()
+            print(f"  ✓ SQLite connection: OK")
+            print(f"  ✓ Observed messages: {msg_count}")
+            print(f"  ✓ Alerts recorded: {alert_count}")
+            print(f"  ✓ Cached media analyses: {media_count}")
+            print(f"  ✓ Bot users registered: {user_count}")
+        except Exception as exc:
+            print(f"  ✗ SQLite error: {exc}")
+    else:
+        print(f"  ! SQLite database file does not exist yet (will be created on first run)")
+
+    # 2. Telegram Watcher Session
+    print(f"\n[Telegram Watcher] Channel: {settings.telegram.channel}")
+    if settings.telegram.api_id and settings.telegram.api_hash:
+        print(f"  ✓ API ID & Hash: Configured")
+    else:
+        print(f"  ✗ API ID / Hash: Missing")
+    if settings.telegram.session_path.exists():
+        print(f"  ✓ Session file: Found ({settings.telegram.session_path})")
+    else:
+        print(f"  ! Session file not found at {settings.telegram.session_path}")
+
+    # 3. Notification Channels
+    print(f"\n[Notifiers]")
+    if settings.telegram_alert.enabled:
+        print(f"  ✓ Telegram Bot Alerts: ENABLED (recipients: {len(settings.telegram_alert.chat_ids)} chats, {len(settings.telegram_alert.allowed_usernames)} usernames)")
+    else:
+        print(f"  - Telegram Bot Alerts: Disabled")
+
+    if settings.whatsapp.enabled:
+        print(f"  ✓ WhatsApp ({settings.whatsapp.provider}): ENABLED (URL: {settings.whatsapp.openwa_url})")
+    else:
+        print(f"  - WhatsApp: Disabled")
+
+    if settings.sms.enabled:
+        print(f"  ✓ Twilio SMS: ENABLED ({len(settings.sms.recipients)} recipients)")
+    else:
+        print(f"  - Twilio SMS: Disabled")
+
+    if settings.email.enabled:
+        print(f"  ✓ Email (SMTP): ENABLED ({len(settings.email.recipients)} recipients)")
+    else:
+        print(f"  - Email: Disabled")
+
+    # 4. Trend & AI Assistant
+    print(f"\n[AI & Trend Service]")
+    llm_client = build_llm_client(settings.trend)
+    if llm_client.enabled:
+        health_map = llm_client.health()
+        for name, status in health_map.items():
+            icon = "✓" if status == "connected" else ("-" if status == "configured" else "!")
+            print(f"  {icon} Provider '{name}': {status}")
+    else:
+        print(f"  - LLM Integration: Disabled (using deterministic statistical forecasting)")
+
+    print("\n=== System Diagnostics Complete ===")
 
 
 if __name__ == "__main__":
