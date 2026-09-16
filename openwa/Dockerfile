@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm AS builder
+FROM node:26-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DO_NOT_TRACK=1 \
@@ -25,7 +25,7 @@ RUN LIGHTPANDA_EXECUTABLE_PATH=/bin/false \
     pnpm --config.inject-workspace-packages=true \
     --filter @open-wa/wa-automate deploy --prod /prod/openwa
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
