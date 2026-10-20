@@ -114,8 +114,9 @@ class WhatsAppFoundersWatcher:
         return None
 
     async def _fetch_all_chats(self) -> list[dict[str, Any]]:
-        # OpenWA supports /getAllChats, /api/getAllChats, or session-scoped /api/<session>/chats
+        # OpenWA v5 uses /api/chats/getAll; v4 used /api/getAllChats or /getAllChats
         endpoints = [
+            f"{self.base_url}/api/chats/getAll",
             f"{self.base_url}/api/getAllChats",
             f"{self.base_url}/getAllChats",
             f"{self.base_url}/chats",
@@ -124,14 +125,33 @@ class WhatsAppFoundersWatcher:
         return await asyncio.to_thread(self._request_first_success, endpoints)
 
     async def _fetch_chat_messages(self, chat_id: str, count: int = 30) -> list[dict[str, Any]]:
+        # In v5, POST /api/messages/getAll with JSON body is the primary reliable method
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        v5_url = f"{self.base_url}/api/messages/getAll"
+        payload = json.dumps({"chatId": chat_id, "includeMe": True, "includeNotifications": False}).encode("utf-8")
+        try:
+            req = urllib.request.Request(v5_url, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    msgs = data.get("data")
+                    if isinstance(msgs, list) and msgs:
+                        return msgs[-count:]
+        except Exception as exc:
+            LOGGER.debug("OpenWA v5 POST messages/getAll failed: %s", exc)
+
         quoted_id = urllib.parse.quote(chat_id)
-        endpoints = [
+        fallback_endpoints = [
             f"{self.base_url}/api/getAllMessagesInChat?chatId={quoted_id}&count={count}",
             f"{self.base_url}/getAllMessagesInChat?chatId={quoted_id}&count={count}",
             f"{self.base_url}/messages/{quoted_id}?count={count}",
             f"{self.base_url}/api/{self.session}/messages/{quoted_id}?count={count}",
         ]
-        return await asyncio.to_thread(self._request_first_success, endpoints)
+        return await asyncio.to_thread(self._request_first_success, fallback_endpoints)
 
     def _request_first_success(self, endpoints: list[str]) -> list[dict[str, Any]]:
         headers = {"Content-Type": "application/json"}

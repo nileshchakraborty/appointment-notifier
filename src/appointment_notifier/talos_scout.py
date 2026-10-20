@@ -297,12 +297,18 @@ class TalosScoutService:
                 temperature=0.1,
             )
             raw = response.content.strip()
-            # Clean possible markdown fences
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\n?", "", raw)
-                raw = re.sub(r"\n?```$", "", raw)
+            # Strip reasoning model <think>...</think> if present
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-            extracted = json.loads(raw)
+            # Extract JSON array using regex or fallback to fence stripping
+            match = re.search(r"\[\s*\{.*\}\s*\]", raw, re.DOTALL)
+            if match:
+                raw_json = match.group(0)
+            else:
+                raw_json = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw_json = re.sub(r"\s*```$", "", raw_json).strip()
+
+            extracted = json.loads(raw_json)
             if not isinstance(extracted, list):
                 return 0
 
