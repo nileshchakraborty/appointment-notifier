@@ -1,5 +1,6 @@
 services:
   openwa:
+    profiles: ["docker-openwa"]
     build:
       context: .
       dockerfile: openwa/Dockerfile
@@ -11,7 +12,7 @@ services:
       - "0.0.0.0:8081:8081"
     environment:
       NODE_ENV: production
-      WA_API_KEY: "${OPENWA_API_KEY:?OPENWA_API_KEY is required}"
+      WA_API_KEY: "${OPENWA_API_KEY:-}"
       OPENWA_ALLOW_REGISTRATION: "true"
       OPENWA_MAX_SESSIONS: "3"
     volumes:
@@ -51,13 +52,10 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
-    environment:
-      OPENWA_URL: http://openwa:8081
-    depends_on:
-      openwa:
-        condition: service_healthy
     volumes:
       - ./.state:/app/.state
       - ./.secrets:/run/secrets:ro

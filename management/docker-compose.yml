@@ -1,10 +1,12 @@
 services:
   portainer:
-    image: portainer/portainer-ce:latest
+    image: portainer/portainer-ce:2.39.5
     container_name: rpi-portainer
     restart: unless-stopped
+    environment:
+      AGENT_SECRET: "${PORTAINER_AGENT_SECRET:?PORTAINER_AGENT_SECRET is required}"
     ports:
-      - "0.0.0.0:9000:9000"
+      - "127.0.0.1:9000:9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./portainer-data:/data

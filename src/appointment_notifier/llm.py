@@ -186,8 +186,81 @@ class NvidiaNimProvider:
         _request_health(self.url + "/v1/models", headers, timeout=min(self.timeout_seconds, 5))
 
 
+class FedoraLlmProvider:
+    name = "fedora"
+
+    def __init__(
+        self,
+        *,
+        url: str = "http://fedora.local:8080",
+        model: str = "deepseek-7b",
+        timeout_seconds: int = 60,
+        fallback_urls: tuple[str, ...] = ("http://192.168.1.250:8080",),
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self.fallback_urls = tuple(u.rstrip("/") for u in fallback_urls if u)
+
+    def _urls_to_try(self) -> list[str]:
+        urls = [self.url]
+        for fb in self.fallback_urls:
+            if fb not in urls:
+                urls.append(fb)
+        return urls
+
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        last_error = None
+        for base_url in self._urls_to_try():
+            try:
+                data = _request_json(
+                    base_url + "/v1/chat/completions",
+                    payload,
+                    headers,
+                    timeout=self.timeout_seconds,
+                )
+                choices = data.get("choices") or []
+                content = str(((choices[0] if choices else {}).get("message") or {}).get("content") or "").strip()
+                if content:
+                    return content
+            except Exception as exc:
+                last_error = exc
+                LOGGER.debug("Fedora LLM request to %s failed: %s", base_url, exc)
+        raise LlmProviderError(f"Fedora LLM failed: {last_error}")
+
+    def health(self) -> None:
+        last_error = None
+        for base_url in self._urls_to_try():
+            try:
+                _request_health(base_url + "/v1/models", {}, timeout=min(self.timeout_seconds, 5))
+                return
+            except Exception as exc:
+                last_error = exc
+        raise LlmProviderError(f"Fedora LLM health check failed: {last_error}")
+
+
 def build_llm_client(settings: TrendSettings) -> FallbackLlmClient:
     configured: dict[str, LlmProvider] = {}
+    if getattr(settings, "fedora_enabled", False):
+        configured["fedora"] = FedoraLlmProvider(
+            url=getattr(settings, "fedora_url", "http://fedora.local:8080"),
+            model=getattr(settings, "fedora_model", "deepseek-7b"),
+            timeout_seconds=getattr(settings, "fedora_timeout_seconds", 60),
+        )
     if settings.nvidia_enabled:
         configured["nvidia"] = NvidiaNimProvider(
             url=settings.nvidia_url,

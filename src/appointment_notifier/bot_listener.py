@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -17,17 +18,40 @@ LOGGER = logging.getLogger(__name__)
 HELP_TEXT = (
     "Commands:\n"
     "/start - show this command list\n"
-    "/help - show this command list\n"
+    "/help [visa|talos] - show command list or topic help\n"
     "/current - show whether the latest known state is available\n"
     "/last - show previous availability timestamp\n"
-    "/status - show watcher status\n"
+    "/status - show watcher and system status\n"
     "/trend - summarize posting history and next likely window\n"
-    "/ask <question> - chat with the Pi-local appointment assistant\n"
+    "/ask <question> - chat with the visa appointment assistant\n"
     "/forget - erase your saved conversation history\n"
     "/whoami - show your Telegram identifiers\n"
     "/users - list allowed users (owner only)\n"
     "/allow <chat_id|@username> [owner] - add a user (owner only)\n"
-    "/revoke <chat_id|@username> - remove a non-owner user (owner only)"
+    "/revoke <chat_id|@username> - remove a non-owner user (owner only)\n\n"
+    "Talos & Founders Scout:\n"
+    "/talos <question> - ask about startups, outreach, or Talos Protocol visibility\n"
+    "/startups [filter] - list discovered startups from AI Founders Lounge\n"
+    "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge"
+)
+
+HELP_TALOS = (
+    "🚀 **Talos Protocol & Founder Scout Commands:**\n\n"
+    "• `/talos <question>` — Ask the strategic scout questions grounded in AI Founders Lounge chat history.\n"
+    "  *Examples:*\n"
+    "  - `/talos which startup should I reach out to to get more visibility for talos protocol?`\n"
+    "  - `/talos who is building multi-agent frameworks or swarms?`\n"
+    "  - `/talos draft a message proposing a Talos integration to the founder of [Startup]`\n"
+    "• `/startups [optional search]` — View top startups extracted from the chat, ranked by Talos synergy score (1-5 stars).\n"
+    "• `/sync` — Force an immediate poll & extraction cycle of WhatsApp messages.\n"
+)
+
+HELP_VISA = (
+    "📌 **Visa & Appointment Commands:**\n\n"
+    "• `/current` — Check if visa appointment slots are currently open.\n"
+    "• `/last` — See when slots were last open.\n"
+    "• `/trend` — Statistical forecast and historical release windows.\n"
+    "• `/ask <question>` — Ask questions about slots, bulk releases, OFC vs Consular, etc.\n"
 )
 
 
@@ -38,6 +62,8 @@ class TelegramBotCommandListener:
         store: AlertStore,
         trend_service: TrendService | None = None,
         chat_service: OllamaChatService | None = None,
+        talos_scout: Any | None = None,
+        whatsapp_watcher: Any | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -56,6 +82,8 @@ class TelegramBotCommandListener:
         self.base_url = f"https://api.telegram.org/bot{settings.bot_token}"
         self.trend_service = trend_service
         self.chat_service = chat_service
+        self.talos_scout = talos_scout
+        self.whatsapp_watcher = whatsapp_watcher
         self._seed_bot_users()
 
     async def run(self) -> None:
@@ -120,9 +148,24 @@ class TelegramBotCommandListener:
         if not text:
             return
 
-        command = text.split()[0].split("@")[0].lower()
+        parts = text.split()
+        command = parts[0].split("@")[0].lower()
+        subquery = text.partition(" ")[2].strip()
+
         if command in {"/start", "/help"}:
-            response = HELP_TEXT
+            sub_lower = subquery.lower()
+            if sub_lower in {"talos", "scout", "startup", "startups"}:
+                response = HELP_TALOS
+            elif sub_lower in {"visa", "slot", "slots", "appointment"}:
+                response = HELP_VISA
+            else:
+                response = HELP_TEXT
+        elif command in {"/talos", "/scout"}:
+            response = await self._talos_query(chat_id, subquery)
+        elif command in {"/startups", "/founders"}:
+            response = self._startups_list(subquery)
+        elif command == "/sync":
+            response = await self._sync_command(subquery)
         elif command == "/status":
             response = await self._format_status()
         elif command == "/trend":
@@ -131,8 +174,7 @@ class TelegramBotCommandListener:
             else:
                 response = await self.trend_service.summarize_async()
         elif command == "/ask":
-            question = text.partition(" ")[2].strip()
-            response = await self._chat(chat_id, question)
+            response = await self._smart_chat(chat_id, subquery)
         elif command == "/forget":
             removed = self.store.clear_chat_history(chat_id)
             response = f"Forgot {removed} saved conversation messages."
@@ -149,9 +191,14 @@ class TelegramBotCommandListener:
         elif command == "/revoke":
             response = self._owner_command(message, chat_id, lambda: self._revoke_user(text))
         elif text.startswith("/"):
-            response = "Unknown command. Use /current, /last, /trend, /ask, /forget, /status, /whoami, or /help."
+            response = (
+                "Unknown command.\n\n"
+                "📌 Visa: /current, /last, /trend, /ask\n"
+                "🚀 Talos: /talos <question>, /startups, /sync\n"
+                "⚙️ General: /status, /whoami, /forget, /help"
+            )
         else:
-            response = await self._chat(chat_id, text)
+            response = await self._smart_chat(chat_id, text)
 
         await asyncio.to_thread(
             self._api_json,
@@ -162,6 +209,49 @@ class TelegramBotCommandListener:
                 "disable_web_page_preview": "true",
             },
         )
+
+    async def _smart_chat(self, chat_id: str, question: str) -> str:
+        if not question:
+            return "Usage: /ask <question> for visa slots or /talos <question> for Talos Protocol & startup outreach."
+        if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge)\b", question, re.I):
+            ans = await self._talos_query(chat_id, question)
+            return f"[Talos Scout 🚀]\n\n{ans}\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots."
+        return await self._chat(chat_id, question)
+
+    async def _talos_query(self, chat_id: str, question: str) -> str:
+        if self.talos_scout is None or not getattr(self.talos_scout, "enabled", False):
+            return "Talos Scout service is not configured or LLM is offline."
+        if not question:
+            return "Usage: /talos <question> (e.g. /talos which startup can give Talos more visibility?)"
+        if len(question) > 1500:
+            return "Please keep each question under 1,500 characters."
+        try:
+            return await asyncio.wait_for(self.talos_scout.answer(chat_id, question), timeout=120)
+        except Exception:
+            LOGGER.exception("Talos Scout request failed")
+            return "The Talos Scout AI is temporarily unavailable. Check /status for connectivity."
+
+    def _startups_list(self, filter_term: str) -> str:
+        if self.talos_scout is None:
+            return "Talos Scout service is not configured."
+        return self.talos_scout.format_startups_list(filter_term=filter_term or None)
+
+    async def _sync_command(self, subquery: str = "") -> str:
+        if self.whatsapp_watcher is None:
+            return "WhatsApp monitor is not configured."
+        try:
+            new_msgs = await self.whatsapp_watcher.sync_now()
+            synced_vectors = 0
+            if self.talos_scout is not None:
+                synced_vectors = await asyncio.to_thread(self.talos_scout.sync_all_startups_to_qdrant)
+            startups_count = self.store.count_startups()
+            return (
+                f"✅ Synced AI Founders Lounge: fetched {new_msgs} new messages, "
+                f"{synced_vectors} startups vector-indexed in Qdrant. "
+                f"Total startups: {startups_count}."
+            )
+        except Exception as exc:
+            return f"WhatsApp sync failed: {exc}"
 
     async def _chat(self, chat_id: str, question: str) -> str:
         if self.chat_service is None or not self.chat_service.enabled:
@@ -208,6 +298,15 @@ class TelegramBotCommandListener:
             else:
                 for provider, status in statuses.items():
                     lines.append(f"AI {provider}: {status}")
+
+        if self.whatsapp_watcher is not None:
+            wa_status = getattr(self.whatsapp_watcher, "status", "ready")
+            msg_count = self.store.count_whatsapp_messages()
+            startup_count = self.store.count_startups()
+            lines.append(f"WhatsApp Founders Lounge: {wa_status} ({msg_count} msgs, {startup_count} startups)")
+        elif self.talos_scout is not None:
+            startup_count = self.store.count_startups()
+            lines.append(f"Talos Scout: {startup_count} startups indexed")
         return "\n".join(lines)
 
     def _format_current(self) -> str:

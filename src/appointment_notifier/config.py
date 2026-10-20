@@ -93,7 +93,11 @@ class TrendSettings:
     context_tokens: int
     response_tokens: int
     chat_timeout_seconds: int = 150
-    provider_order: tuple[str, ...] = ("nvidia", "ollama_cloud", "ollama")
+    provider_order: tuple[str, ...] = ("fedora", "nvidia", "ollama_cloud", "ollama")
+    fedora_enabled: bool = True
+    fedora_url: str = "http://fedora.local:8080"
+    fedora_model: str = "deepseek-7b"
+    fedora_timeout_seconds: int = 60
     nvidia_enabled: bool = False
     nvidia_url: str = "https://integrate.api.nvidia.com"
     nvidia_model: str = "openai/gpt-oss-20b"
@@ -106,6 +110,20 @@ class TrendSettings:
 
 
 @dataclass(frozen=True)
+class TalosScoutSettings:
+    enabled: bool = True
+    founders_chat_name: str = "AI Founders Lounge"
+    openwa_session: str = "default"
+    poll_interval_seconds: int = 30
+    auto_extract: bool = True
+    qdrant_url: str = "http://fedora.local:6333"
+    qdrant_collection: str = "talos_startups"
+    embedding_url: str = "http://fedora.local:8082"
+    embedding_model: str = "bge-small-en-v1.5"
+    vector_search_limit: int = 5
+
+
+@dataclass(frozen=True)
 class AppSettings:
     telegram: TelegramSettings
     telegram_alert: TelegramAlertSettings
@@ -114,6 +132,7 @@ class AppSettings:
     whatsapp: WhatsAppSettings
     imessage: IMessageSettings
     trend: TrendSettings
+    talos_scout: TalosScoutSettings
     sqlite_path: Path
     dry_run: bool
     log_level: str
@@ -188,7 +207,11 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             response_tokens=_int("OLLAMA_RESPONSE_TOKENS", 220),
             chat_timeout_seconds=_int("OLLAMA_CHAT_TIMEOUT_SECONDS", 150),
             provider_order=_csv("LLM_PROVIDER_ORDER")
-            or ("nvidia", "ollama_cloud", "ollama"),
+            or ("fedora", "nvidia", "ollama_cloud", "ollama"),
+            fedora_enabled=_bool("FEDORA_LLM_ENABLED", default=True),
+            fedora_url=os.getenv("FEDORA_LLM_URL", "http://fedora.local:8080").rstrip("/"),
+            fedora_model=os.getenv("FEDORA_LLM_MODEL", "deepseek-7b").strip(),
+            fedora_timeout_seconds=_int("FEDORA_LLM_TIMEOUT_SECONDS", 60),
             nvidia_enabled=_bool("NVIDIA_NIM_ENABLED"),
             nvidia_url=os.getenv(
                 "NVIDIA_NIM_URL", "https://integrate.api.nvidia.com"
@@ -210,6 +233,18 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             ollama_cloud_api_key_file=os.getenv(
                 "OLLAMA_CLOUD_API_KEY_FILE", "/run/secrets/ollama_api_key"
             ).strip(),
+        ),
+        talos_scout=TalosScoutSettings(
+            enabled=_bool("TALOS_SCOUT_ENABLED", default=True),
+            founders_chat_name=os.getenv("WHATSAPP_FOUNDERS_CHAT", "AI Founders Lounge").strip(),
+            openwa_session=os.getenv("WHATSAPP_FOUNDERS_SESSION", "default").strip(),
+            poll_interval_seconds=_int("WHATSAPP_FOUNDERS_POLL_INTERVAL", 30),
+            auto_extract=_bool("TALOS_SCOUT_AUTO_EXTRACT", default=True),
+            qdrant_url=os.getenv("TALOS_QDRANT_URL", "http://fedora.local:6333").rstrip("/"),
+            qdrant_collection=os.getenv("TALOS_QDRANT_COLLECTION", "talos_startups").strip(),
+            embedding_url=os.getenv("TALOS_EMBEDDING_URL", "http://fedora.local:8082").rstrip("/"),
+            embedding_model=os.getenv("TALOS_EMBEDDING_MODEL", "bge-small-en-v1.5").strip(),
+            vector_search_limit=_int("TALOS_VECTOR_SEARCH_LIMIT", 5),
         ),
         sqlite_path=Path(os.getenv("SQLITE_PATH", ".state/appointment-notifier.sqlite3")),
         dry_run=_bool("DRY_RUN"),

@@ -1,16 +1,31 @@
 # RPi management gateway
 
-- `https://rpi.local/`, `https://rpi.home.arpa/`, or `https://dashboard.rpi.home.arpa/` — local quick-links dashboard
-- `https://portainer.rpi.home.arpa/` — Portainer Docker management
-- `https://openwa.rpi.home.arpa/` — OpenWA
-- `https://pihole.rpi.home.arpa/` — Pi-hole
-- `https://streambert-tv.rpi.home.arpa/` — Streambert TV
+- `http://rpi.local/`, `http://rpi.home.arpa/`, or `http://dashboard.rpi.home.arpa/` — local quick-links dashboard
+- `http://portainer.rpi.home.arpa/` — Portainer Docker management
+- `http://openwa.rpi.home.arpa/` — OpenWA
+- `http://pihole.rpi.home.arpa/` — Pi-hole
+- `http://streambert-tv.rpi.home.arpa/` — Streambert TV
 - `http://rpi.local/firestick/streambert.apk` — Streambert Fire TV installer
 
-Caddy is the only service exposed on port 80. Portainer itself is bound to
-loopback and is reachable through Caddy only. The `/firestick/*` path is proxied
-to the Streambert TV service so its generated APK can be downloaded from the
-main dashboard without adding another container or host-specific file mount.
-Because the Caddyfile itself is an individual bind mount, replacing the host
-file requires `docker compose up -d --force-recreate caddy`; an in-container
-reload alone can continue reading the previously mounted inode.
+The active RPi host Nginx service owns port 80. Portainer itself is bound to
+loopback and is reachable through the Nginx hostname route only. The Caddy
+service remains in this Compose project but must not be started while Nginx is
+active because both services require host port 80. The HTTPS Caddy routes are
+therefore not part of the current live path.
+
+## Portainer environments
+
+The Portainer Server runs on the RPi and manages two Docker environments:
+
+- `RPi` uses the RPi's local `/var/run/docker.sock`.
+- `Fedora` connects to a Portainer Agent at `192.168.1.250:9001`.
+
+The server and agent must use the same `PORTAINER_AGENT_SECRET` in their local
+`.env` files. Never commit that value. The Fedora agent is deployed separately
+from Streambert with `docker-compose.fedora-agent.yml`, so Streambert's
+`--remove-orphans` deployment does not remove it.
+
+The initial administrator username is `admin`. Its generated password is kept
+only on the RPi at `/home/rpi/.config/portainer/admin-password` with mode 600;
+read it locally over SSH and move it into a password manager. Portainer stores
+the active password as a one-way hash in its database.

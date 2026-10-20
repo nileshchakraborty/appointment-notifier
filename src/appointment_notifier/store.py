@@ -44,6 +44,8 @@ class AlertStore:
         self._init_bot_users()
         self._init_observations()
         self._init_chat_history()
+        self._init_whatsapp_messages()
+        self._init_startups()
 
     def record_observation(self, message: TelegramMessage, signal: SlotSignal) -> None:
         with self.conn:
@@ -828,6 +830,167 @@ class AlertStore:
             tuple(params),
         ).fetchone()
         return row is not None
+
+    def _init_whatsapp_messages(self) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                create table if not exists whatsapp_messages (
+                  msg_id text primary key,
+                  chat_name text not null,
+                  sender_id text,
+                  sender_name text,
+                  text text not null,
+                  sent_at text,
+                  raw_json text,
+                  processed integer not null default 0,
+                  created_at text not null default current_timestamp
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                create index if not exists idx_whatsapp_chat_processed
+                on whatsapp_messages(chat_name, processed)
+                """
+            )
+
+    def _init_startups(self) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                create table if not exists startups (
+                  id integer primary key autoincrement,
+                  startup_name text not null,
+                  founder_name text,
+                  founder_handle text,
+                  pitch text not null,
+                  tech_stack text,
+                  talos_synergy_score integer not null default 1,
+                  synergy_rationale text,
+                  outreach_hook text,
+                  links text,
+                  raw_message_id text,
+                  created_at text not null default current_timestamp,
+                  updated_at text not null default current_timestamp
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                create index if not exists idx_startups_synergy
+                on startups(talos_synergy_score desc)
+                """
+            )
+
+    def record_whatsapp_message(
+        self,
+        *,
+        msg_id: str,
+        chat_name: str,
+        sender_id: str | None = None,
+        sender_name: str | None = None,
+        text: str,
+        sent_at: str | None = None,
+        raw_json: str | None = None,
+    ) -> bool:
+        try:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    insert into whatsapp_messages (msg_id, chat_name, sender_id, sender_name, text, sent_at, raw_json)
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    on conflict(msg_id) do nothing
+                    """,
+                    (msg_id, chat_name, sender_id, sender_name, text, sent_at, raw_json),
+                )
+                return cursor.rowcount > 0
+        except Exception:
+            return False
+
+    def get_unprocessed_whatsapp_messages(self, chat_name: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        clauses = ["processed = 0"]
+        params: list[Any] = []
+        if chat_name:
+            clauses.append("chat_name = ?")
+            params.append(chat_name)
+        query = f"select * from whatsapp_messages where {' and '.join(clauses)} order by sent_at asc limit ?"
+        params.append(limit)
+        rows = self.conn.execute(query, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_whatsapp_messages_processed(self, msg_ids: list[str]) -> None:
+        if not msg_ids:
+            return
+        placeholders = ",".join("?" for _ in msg_ids)
+        with self.conn:
+            self.conn.execute(
+                f"update whatsapp_messages set processed = 1 where msg_id in ({placeholders})",
+                tuple(msg_ids),
+            )
+
+    def record_startup(
+        self,
+        *,
+        startup_name: str,
+        founder_name: str | None = None,
+        founder_handle: str | None = None,
+        pitch: str,
+        tech_stack: str | None = None,
+        talos_synergy_score: int = 1,
+        synergy_rationale: str | None = None,
+        outreach_hook: str | None = None,
+        links: str | None = None,
+        raw_message_id: str | None = None,
+    ) -> int:
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                insert into startups (
+                  startup_name, founder_name, founder_handle, pitch,
+                  tech_stack, talos_synergy_score, synergy_rationale,
+                  outreach_hook, links, raw_message_id, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+                """,
+                (
+                    startup_name,
+                    founder_name,
+                    founder_handle,
+                    pitch,
+                    tech_stack,
+                    talos_synergy_score,
+                    synergy_rationale,
+                    outreach_hook,
+                    links,
+                    raw_message_id,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def get_top_startups(self, limit: int = 10, filter_term: str | None = None) -> list[dict[str, Any]]:
+        if filter_term:
+            query = """
+            select * from startups
+            where startup_name like ? or pitch like ? or tech_stack like ? or synergy_rationale like ?
+            order by talos_synergy_score desc, updated_at desc limit ?
+            """
+            pattern = f"%{filter_term}%"
+            rows = self.conn.execute(query, (pattern, pattern, pattern, pattern, limit)).fetchall()
+        else:
+            query = "select * from startups order by talos_synergy_score desc, updated_at desc limit ?"
+            rows = self.conn.execute(query, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_whatsapp_messages(self, chat_name: str | None = None) -> int:
+        if chat_name:
+            row = self.conn.execute("select count(*) as cnt from whatsapp_messages where chat_name = ?", (chat_name,)).fetchone()
+        else:
+            row = self.conn.execute("select count(*) as cnt from whatsapp_messages").fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def count_startups(self) -> int:
+        row = self.conn.execute("select count(*) as cnt from startups").fetchone()
+        return int(row["cnt"]) if row else 0
 
     def optimize(self) -> None:
         """Run SQLite index and query-planner optimization."""

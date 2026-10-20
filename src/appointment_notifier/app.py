@@ -12,8 +12,10 @@ from .media import PortalMediaAnalyzer
 from .notifiers import CompositeNotifier
 from .parser import VisaSlotParser
 from .store import AlertStore
+from .talos_scout import TalosScoutService
 from .telegram_watcher import TelegramWatcher
 from .trend import TrendService
+from .whatsapp_watcher import WhatsAppFoundersWatcher
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,11 +95,24 @@ class AppointmentNotifierApp:
             self.settings.trend,
             llm_client,
         )
+        talos_scout = TalosScoutService(
+            store=self.store,
+            settings=self.settings.talos_scout,
+            llm_client=llm_client,
+        )
+        whatsapp_watcher = WhatsAppFoundersWatcher(
+            settings=self.settings.talos_scout,
+            whatsapp_settings=self.settings.whatsapp,
+            store=self.store,
+            talos_scout=talos_scout,
+        )
         bot_listener = TelegramBotCommandListener(
             self.settings.telegram_alert,
             self.store,
             trend_service=trend_service,
             chat_service=chat_service,
+            talos_scout=talos_scout,
+            whatsapp_watcher=whatsapp_watcher,
         )
         async def supervise(name, runner):
             backoff = 1
@@ -112,10 +127,14 @@ class AppointmentNotifierApp:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 60)
 
-        await asyncio.gather(
+        tasks = [
             supervise("Telegram watcher", lambda: watcher.run(self.settings.telegram.history_limit, self.handle_message)),
             supervise("Telegram bot listener", bot_listener.run),
-        )
+        ]
+        if self.settings.talos_scout.enabled:
+            tasks.append(supervise("WhatsApp Founders watcher", whatsapp_watcher.run))
+
+        await asyncio.gather(*tasks)
 
     def _build_alert(self, message: TelegramMessage, signal: SlotSignal) -> Alert:
         source = message.url or self.settings.telegram.channel
