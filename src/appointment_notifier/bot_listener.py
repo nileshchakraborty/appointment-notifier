@@ -32,7 +32,8 @@ HELP_TEXT = (
     "Talos & Founders Scout:\n"
     "/talos <question> - ask about startups, outreach, or Talos Protocol visibility\n"
     "/startups [filter] - list discovered startups from AI Founders Lounge\n"
-    "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge"
+    "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge\n"
+    "/a2a - view Talos A2A v1 task lifecycle specification (Immediate, Wait, Get, Stream)"
 )
 
 HELP_TALOS = (
@@ -44,6 +45,7 @@ HELP_TALOS = (
     "  - `/talos draft a message proposing a Talos integration to the founder of [Startup]`\n"
     "• `/startups [optional search]` — View top startups extracted from the chat, ranked by Talos synergy score (1-5 stars).\n"
     "• `/sync` — Force an immediate poll & extraction cycle of WhatsApp messages.\n"
+    "• `/a2a` — View the Talos A2A v1 task execution specification (Task Immediate, Task Wait, Task Get, A2A Task Stream).\n"
 )
 
 HELP_VISA = (
@@ -52,6 +54,27 @@ HELP_VISA = (
     "• `/last` — See when slots were last open.\n"
     "• `/trend` — Statistical forecast and historical release windows.\n"
     "• `/ask <question>` — Ask questions about slots, bulk releases, OFC vs Consular, etc.\n"
+)
+
+A2A_SPEC_TEXT = (
+    "⚡ **Talos Protocol — A2A v1 Task Execution & Trust Architecture**\n\n"
+    "Talos implements the official Agent-to-Agent (A2A) v1 specification coupled with Double Ratchet E2EE messaging, cryptographic agent DIDs, and Merkle audit trees.\n\n"
+    "### 🔄 Core A2A Task Primitives:\n\n"
+    "1. **Task Immediate (`SendMessage` / `tasks.send` immediate mode)**\n"
+    "   • **Mode:** Synchronous low-latency dispatch (`returnImmediately: false`).\n"
+    "   • **Use Case:** Atomic tool invocations, quick queries, deterministic RPCs.\n"
+    "   • **Flow:** Client sends task request, gateway executes immediately and returns completed state + outputs in the response.\n\n"
+    "2. **Task Wait (`SubscribeToTask` / `tasks.wait`)**\n"
+    "   • **Mode:** Asynchronous barrier synchronization & long-poll wait.\n"
+    "   • **Use Case:** Multi-step agent orchestrations, swarm consensus, long background jobs.\n"
+    "   • **Flow:** Client submits task with `returnImmediately: true`, receives `taskId`, and issues `SubscribeToTask` to await terminal state.\n\n"
+    "3. **Task Get (`GetTask` / `tasks.get`)**\n"
+    "   • **Mode:** Non-blocking state polling & artifact inspection.\n"
+    "   • **Use Case:** Inspect task lifecycle status (`TASK_STATE_WORKING`, `TASK_STATE_COMPLETED`), output messages, error codes, and download generated artifacts.\n\n"
+    "4. **A2A Task Stream (`SendStreamingMessage` / `tasks.stream`)**\n"
+    "   • **Mode:** Real-time bidirectional SSE / WebSocket event stream.\n"
+    "   • **Use Case:** Token-by-token streaming, live intermediate reasoning traces (`<think>`), and real-time status updates across agent boundaries.\n\n"
+    "💡 *Ask `/talos <question>` (e.g. `/talos how can AlphaForge use Task Stream?`) to see how startups can integrate these primitives!*"
 )
 
 
@@ -162,6 +185,8 @@ class TelegramBotCommandListener:
                 response = HELP_TEXT
         elif command in {"/talos", "/scout"}:
             response = await self._talos_query(chat_id, subquery)
+        elif command in {"/a2a", "/protocol"}:
+            response = A2A_SPEC_TEXT
         elif command in {"/startups", "/founders"}:
             response = self._startups_list(subquery)
         elif command == "/sync":
