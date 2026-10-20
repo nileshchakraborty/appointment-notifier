@@ -218,11 +218,14 @@ class FedoraLlmProvider:
         temperature: float,
     ) -> str:
         headers = {"Content-Type": "application/json"}
-        # Ensure sufficient tokens for DeepSeek-R1 reasoning models so generation doesn't cut off inside <think>
-        effective_tokens = max(max_tokens, 1200)
+        effective_tokens = max(max_tokens, 1500)
+        prepared_messages = list(messages)
+        if prepared_messages and prepared_messages[-1].get("role") == "user":
+            prepared_messages.append({"role": "assistant", "content": "<think>\n</think>\n"})
+
         payload = {
             "model": self.model,
-            "messages": messages,
+            "messages": prepared_messages,
             "stream": False,
             "temperature": temperature,
             "max_tokens": effective_tokens,
@@ -239,11 +242,22 @@ class FedoraLlmProvider:
                 choices = data.get("choices") or []
                 msg = (choices[0] if choices else {}).get("message") or {}
                 content = str(msg.get("content") or "").strip()
-                if not content and msg.get("reasoning_content"):
-                    content = str(msg.get("reasoning_content") or "").strip()
                 if content:
+                    # Strip complete <think>...</think>
                     clean = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                    return clean or content
+                    # Strip unclosed <think>... if generation truncated
+                    clean = re.sub(r"<think>.*$", "", clean, flags=re.DOTALL).strip()
+                    if clean:
+                        return clean
+
+                # Only use reasoning_content if content is completely empty AND reasoning_content has an actual answer
+                rc = str(msg.get("reasoning_content") or "").strip()
+                if rc:
+                    clean_rc = re.sub(r"<think>.*?</think>", "", rc, flags=re.DOTALL).strip()
+                    clean_rc = re.sub(r"<think>.*$", "", clean_rc, flags=re.DOTALL).strip()
+                    if clean_rc:
+                        return clean_rc
+
                 last_error = RuntimeError("LLM returned empty choices/content")
             except Exception as exc:
                 last_error = exc

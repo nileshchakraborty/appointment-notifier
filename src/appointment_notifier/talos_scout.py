@@ -14,28 +14,31 @@ from .store import AlertStore
 
 LOGGER = logging.getLogger(__name__)
 
-TALOS_SYSTEM_PROMPT = """You are the Strategic Scout and Partnerships Director for Talos Protocol.
+TALOS_SYSTEM_PROMPT = """You are the Strategic Scout and Partnerships Director for Talos Protocol (talosprotocol.com).
 
-Talos Protocol is a contract-driven platform and trust layer for autonomous AI agents:
-- Cryptographic Identity: Self-sovereign DIDs for every agent and service.
-- Agent-to-Agent Communication: Forward-secret channels with Double Ratchet encryption (E2EE).
-- Granular Authorization: Capability-based tokens with deterministic scope matching.
-- Verifiable Audit: Audit events with Merkle proofs for cross-organizational accountability.
-- Core A2A Task Execution Lifecycle & Primitives:
-  * Task Immediate: Synchronous, low-latency execution (`tasks.send` immediate mode) for atomic tool invocations, quick queries, and deterministic RPCs.
-  * Task Wait: Asynchronous task tracking with long-poll / barrier synchronization (`tasks.wait`) for multi-step agent orchestrations and swarms.
-  * Task Get: Non-blocking task polling, state inspection, and artifact/output retrieval (`tasks.get`).
-  * A2A Task Stream: Real-time bidirectional streaming of task events, intermediate thoughts, token deltas, and live status (`tasks.stream` / SSE / WebSocket).
-- Target audience / High visibility partners: Autonomous agent frameworks, agent swarms/orchestrators, multi-agent platforms, agent toolkits, and agent marketplaces.
+About Talos Protocol (talosprotocol.com):
+Talos Protocol is the contract-driven trust and execution layer for autonomous AI agents and swarms:
+- Cryptographic Identity (DIDs): Verifiable self-sovereign agent identifiers (`did:talos:agent:...`) using Ed25519 and X25519 keypairs.
+- Secure Agent-to-Agent (A2A) Messaging: Forward-secret, end-to-end encrypted (E2EE) channels with Double Ratchet sessions.
+- Granular Authorization: Capability-based invocation tokens (UCAN / Macaroons) enforcing deterministic permission scopes, spending limits, and tool whitelists.
+- Verifiable Audit: Tamper-evident execution logging with BLAKE3 Merkle audit trees and cryptographic receipts.
+- A2A v1 Task Execution Primitives:
+  * Task Immediate: Synchronous low-latency dispatch (`tasks.send` immediate mode) for atomic tool invocations and queries.
+  * Task Wait: Asynchronous barrier tracking (`tasks.wait`) for multi-step agent orchestrations and swarm consensus.
+  * Task Get: Non-blocking state polling and artifact inspection (`tasks.get`).
+  * A2A Task Stream: Real-time bidirectional streaming of task events, status, and multimodal token chunks (`tasks.stream`).
 
-Your goal is to analyze startups and founders from the "AI Founders Lounge" group chat and answer user questions.
-Recommend which founders and startups to reach out to in order to get maximum adoption and visibility for Talos Protocol.
-Always provide concrete, actionable advice:
-1. Name of the Startup and Founder.
-2. What they build.
-3. Why partnering with them or integrating Talos Protocol gives Talos high visibility.
-4. How they can leverage Talos A2A primitives (Task Immediate for instant tool invocations, Task Wait / Task Get for complex async workflows, and A2A Task Stream for live agent streaming).
-5. A tailored, friendly outreach angle or hook.
+Competitive Landscape & Adjacent Players:
+- Decentralized Agent Networks (e.g. Fetch.ai / Morpheus / Autonolas): Focus heavily on token incentives and compute networks, but lack cryptographic Double Ratchet E2EE channels, capability tokens, and canonical A2A task streaming.
+- Agent Orchestration Frameworks (e.g. AutoGen / CrewAI / LangGraph): Application-level prompt chaining libraries, but lack cryptographic agent identity (DIDs), inter-organization E2EE security, and tamper-evident Merkle audit proofs.
+- Workflow Engines (e.g. Temporal): Provide durable task execution and retries, but lack agent identity and end-to-end cryptographic trust.
+- Talos Protocol's Unique Offering: The ONLY unified protocol combining W3C DIDs, Double Ratchet E2EE, capability tokens, Merkle audit trees, and universal A2A v1 task lifecycles for autonomous multi-agent systems.
+
+RESPONSE GUIDELINES:
+- Output your solution DIRECTLY, CONCISELY, and AUTHORITATIVELY.
+- NEVER output internal monologue, reasoning scratchpad, meta-thinking, or say you don't know what talosprotocol.com does. You represent Talos Protocol directly.
+- If asked about companies that match Talos's offerings, contrast Talos against adjacent players (Fetch.ai, Autonolas, AutoGen, CrewAI, LangGraph, Temporal) and explain Talos's unique moat.
+- If analyzing startups from the AI Founders Lounge, recommend specific founders/startups, highlight Talos A2A synergy, and draft an outreach hook.
 """
 
 EXTRACTION_PROMPT = """You are an AI investment scout and tech analyst.
@@ -278,10 +281,106 @@ class TalosScoutService:
             )
             raw = result.content
             cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
             return cleaned or raw
         except Exception as exc:
             LOGGER.exception("Talos Scout LLM query failed")
             return f"Talos Scout query failed: {exc}"
+
+    async def execute_a2a_task(
+        self,
+        task: Any,
+        emit_status: Any,
+        is_cancelled: Any,
+    ) -> tuple[str, list[Any]]:
+        from .a2a.models import Artifact
+
+        question = task.history[-1].get_text() if task.history else ""
+        if not question:
+            return "No question provided in task", []
+
+        if is_cancelled():
+            return "Task was canceled", []
+
+        await emit_status("🔍 Searching Qdrant vector store (Cosine similarity)...")
+        vector_matches = await asyncio.to_thread(
+            self.search_vector_startups,
+            question,
+            self.settings.vector_search_limit,
+        )
+
+        if is_cancelled():
+            return "Task was canceled", []
+
+        top_startups = self.store.get_top_startups(limit=10)
+        recent_msgs = self.store.get_unprocessed_whatsapp_messages(
+            chat_name=self.settings.founders_chat_name,
+            limit=10,
+        )
+
+        artifacts = []
+        if vector_matches:
+            artifacts.append(
+                Artifact(
+                    artifact_id=f"vector_matches_{task.id[:8]}",
+                    name="Qdrant Vector Matches",
+                    mime_type="application/json",
+                    data=vector_matches,
+                )
+            )
+
+        rag_sections: list[str] = []
+        if vector_matches:
+            matches_summary = "\n".join(
+                f"- **{m.get('startup_name')}** (Founder: {m.get('founder_name') or 'Unknown'} | {m.get('founder_handle') or 'N/A'})\n"
+                f"  Pitch: {m.get('pitch')}\n"
+                f"  Synergy Score: {m.get('talos_synergy_score')}/5 (Cosine Similarity: {m.get('similarity_score', 0):.2f})\n"
+                f"  Rationale: {m.get('synergy_rationale')}\n"
+                f"  Outreach Hook: {m.get('outreach_hook') or 'N/A'}\n"
+                f"  Links: {m.get('links') or 'None'}"
+                for m in vector_matches
+            )
+            rag_sections.append(f"### Relevant Startups (Semantic Vector Search via Qdrant):\n{matches_summary}")
+
+        if top_startups:
+            startups_summary = "\n".join(
+                f"- **{s.get('startup_name')}** (Founder: {s.get('founder_name') or 'Unknown'} | {s.get('founder_handle') or 'N/A'})\n"
+                f"  Pitch: {s.get('pitch')}\n"
+                f"  Synergy Score: {s.get('talos_synergy_score')}/5\n"
+                f"  Rationale: {s.get('synergy_rationale')}\n"
+                f"  Links: {s.get('links') or 'None'}"
+                for s in top_startups
+            )
+            rag_sections.append(f"### Top Indexed Startups from AI Founders Lounge:\n{startups_summary}")
+
+        if recent_msgs:
+            recent_text = "\n".join(
+                f"{m.get('sender_name') or 'Anonymous'}: {m.get('text')}"
+                for m in recent_msgs[-10:]
+            )
+            rag_sections.append(f"### Recent Chat Snippets:\n{recent_text}")
+
+        context_text = "\n\n".join(rag_sections) + "\n\n" if rag_sections else "No startups indexed yet.\n\n"
+
+        messages = [
+            {"role": "system", "content": TALOS_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": f"{context_text}User Question: {question}",
+            },
+        ]
+
+        await emit_status("🧠 Synthesizing recommendation with DeepSeek-7B on Fedora...")
+        result = await asyncio.to_thread(
+            self.llm_client.complete,
+            messages,
+            max_tokens=1500,
+            temperature=0.3,
+        )
+        raw = result.content
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
+        return cleaned or raw, artifacts
 
     async def extract_startups_from_batch(self, messages: list[dict[str, Any]]) -> int:
         if not messages or not self.llm_client.enabled:

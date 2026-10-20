@@ -46,6 +46,8 @@ class AlertStore:
         self._init_chat_history()
         self._init_whatsapp_messages()
         self._init_startups()
+        from .a2a.store import A2ATaskStore
+        self.a2a_task_store = A2ATaskStore(self.conn)
 
     def record_observation(self, message: TelegramMessage, signal: SlotSignal) -> None:
         with self.conn:

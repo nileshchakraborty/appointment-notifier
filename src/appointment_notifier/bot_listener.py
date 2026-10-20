@@ -4,10 +4,19 @@ import asyncio
 import json
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
 from typing import Any
 
+from .a2a import (
+    A2AJsonRpcDispatcher,
+    A2ATaskEngine,
+    Message,
+    Task,
+    TaskState,
+    get_agent_card,
+)
 from .config import TelegramAlertSettings
 from .chat import OllamaChatService
 from .store import AlertStore
@@ -32,8 +41,15 @@ HELP_TEXT = (
     "Talos & Founders Scout:\n"
     "/talos <question> - ask about startups, outreach, or Talos Protocol visibility\n"
     "/startups [filter] - list discovered startups from AI Founders Lounge\n"
-    "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge\n"
-    "/a2a - view Talos A2A v1 task lifecycle specification (Immediate, Wait, Get, Stream)"
+    "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge\n\n"
+    "A2A v1 Task Lifecycle:\n"
+    "/tasks (or /task list) - view recent A2A tasks and state\n"
+    "/task get <id> - inspect task status, messages, and artifacts\n"
+    "/task wait <id> - wait for a running task to complete\n"
+    "/task cancel <id> - cancel a running task\n"
+    "/agentcard - inspect Talos Scout canonical A2A Agent Card\n"
+    "/a2a - view A2A task lifecycle architecture overview\n"
+    "/rpc <json> - run a raw A2A JSON-RPC 2.0 command"
 )
 
 HELP_TALOS = (
@@ -45,7 +61,11 @@ HELP_TALOS = (
     "  - `/talos draft a message proposing a Talos integration to the founder of [Startup]`\n"
     "• `/startups [optional search]` — View top startups extracted from the chat, ranked by Talos synergy score (1-5 stars).\n"
     "• `/sync` — Force an immediate poll & extraction cycle of WhatsApp messages.\n"
-    "• `/a2a` — View the Talos A2A v1 task execution specification (Task Immediate, Task Wait, Task Get, A2A Task Stream).\n"
+    "• `/tasks` — View recent A2A background tasks and their states.\n"
+    "• `/task get <task_id>` — Inspect task artifacts (e.g. Qdrant vector match sets) and outputs.\n"
+    "• `/task cancel <task_id>` — Cancel a running A2A task.\n"
+    "• `/agentcard` — View Talos Scout v1 canonical Agent Card.\n"
+    "• `/a2a` — View the Talos A2A v1 task execution specification.\n"
 )
 
 HELP_VISA = (
@@ -108,6 +128,9 @@ class TelegramBotCommandListener:
         self.talos_scout = talos_scout
         self.whatsapp_watcher = whatsapp_watcher
         self._seed_bot_users()
+
+        self.a2a_engine = A2ATaskEngine(self.store.a2a_task_store)
+        self.a2a_rpc = A2AJsonRpcDispatcher(self.a2a_engine, default_handler=self._default_a2a_handler)
 
     async def run(self) -> None:
         if (
@@ -184,9 +207,16 @@ class TelegramBotCommandListener:
             else:
                 response = HELP_TEXT
         elif command in {"/talos", "/scout"}:
-            response = await self._talos_query(chat_id, subquery)
+            await self._dispatch_a2a_streaming(chat_id, subquery, domain="talos")
+            return
         elif command in {"/a2a", "/protocol"}:
             response = A2A_SPEC_TEXT
+        elif command == "/agentcard":
+            response = self._agentcard_command()
+        elif command in {"/task", "/tasks"}:
+            response = await self._task_command(chat_id, subquery)
+        elif command == "/rpc":
+            response = await self._rpc_command(subquery)
         elif command in {"/startups", "/founders"}:
             response = self._startups_list(subquery)
         elif command == "/sync":
@@ -199,7 +229,11 @@ class TelegramBotCommandListener:
             else:
                 response = await self.trend_service.summarize_async()
         elif command == "/ask":
-            response = await self._smart_chat(chat_id, subquery)
+            if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", subquery, re.I):
+                await self._dispatch_a2a_streaming(chat_id, subquery, domain="talos", disambiguated=True)
+            else:
+                await self._dispatch_a2a_streaming(chat_id, subquery, domain="visa")
+            return
         elif command == "/forget":
             removed = self.store.clear_chat_history(chat_id)
             response = f"Forgot {removed} saved conversation messages."
@@ -220,10 +254,15 @@ class TelegramBotCommandListener:
                 "Unknown command.\n\n"
                 "📌 Visa: /current, /last, /trend, /ask\n"
                 "🚀 Talos: /talos <question>, /startups, /sync\n"
+                "⚡ A2A: /tasks, /task get <id>, /task cancel <id>, /agentcard, /a2a\n"
                 "⚙️ General: /status, /whoami, /forget, /help"
             )
         else:
-            response = await self._smart_chat(chat_id, text)
+            if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", text, re.I):
+                await self._dispatch_a2a_streaming(chat_id, text, domain="talos")
+                return
+            else:
+                response = await self._smart_chat(chat_id, text)
 
         await asyncio.to_thread(
             self._api_json,
@@ -234,6 +273,319 @@ class TelegramBotCommandListener:
                 "disable_web_page_preview": "true",
             },
         )
+
+    def _edit_message_text(self, chat_id: str, message_id: int, text: str) -> bool:
+        try:
+            self._api_json(
+                "editMessageText",
+                {
+                    "chat_id": str(chat_id),
+                    "message_id": str(message_id),
+                    "text": text[:4096],
+                    "disable_web_page_preview": "true",
+                },
+            )
+            return True
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "message is not modified" not in err_str:
+                LOGGER.debug("Telegram editMessageText failed: %s", exc)
+            return False
+
+    def _edit_or_send_long_text(self, chat_id: str, message_id: int, text: str) -> None:
+        if len(text) <= 4096:
+            self._edit_message_text(chat_id, message_id, text)
+        else:
+            first_chunk = text[:4000] + "\n... (continued below)"
+            self._edit_message_text(chat_id, message_id, first_chunk)
+            remainder = text[4000:]
+            while remainder:
+                chunk = remainder[:4000]
+                remainder = remainder[4000:]
+                self._api_json(
+                    "sendMessage",
+                    {"chat_id": str(chat_id), "text": chunk, "disable_web_page_preview": "true"},
+                )
+
+    async def _default_a2a_handler(
+        self,
+        task: Task,
+        emit_status: Any,
+        is_cancelled: Any,
+    ) -> tuple[str, list[Any]]:
+        domain = (task.metadata or {}).get("domain", "")
+        if domain == "visa":
+            return await self._visa_a2a_task_handler(task, emit_status, is_cancelled)
+        if self.talos_scout is not None and getattr(self.talos_scout, "enabled", False):
+            return await self.talos_scout.execute_a2a_task(task, emit_status, is_cancelled)
+        if self.chat_service is not None and getattr(self.chat_service, "enabled", False):
+            return await self._visa_a2a_task_handler(task, emit_status, is_cancelled)
+        return "No agent execution service is currently configured or available.", []
+
+    async def _visa_a2a_task_handler(
+        self,
+        task: Task,
+        emit_status: Any,
+        is_cancelled: Any,
+    ) -> tuple[str, list[Any]]:
+        question = task.history[-1].get_text() if task.history else ""
+        if not question:
+            return "No question provided in task", []
+        if is_cancelled():
+            return "Task was canceled", []
+
+        await emit_status("📊 Checking slot history and trends...")
+        if is_cancelled():
+            return "Task was canceled", []
+
+        if self.chat_service is None or not self.chat_service.enabled:
+            return "Local chat is not configured. Use /trend for deterministic statistics.", []
+
+        await emit_status("🧠 Formulating answer with local LLM...")
+        service_settings = getattr(self.chat_service, "settings", None)
+        timeout = max(180, int(getattr(service_settings, "chat_timeout_seconds", 180)))
+        ans = await asyncio.wait_for(self.chat_service.answer(task.context_id, question), timeout=timeout)
+        return ans, []
+
+    async def _dispatch_a2a_streaming(
+        self,
+        chat_id: str,
+        question: str,
+        domain: str = "talos",
+        disambiguated: bool = False,
+    ) -> None:
+        if not question:
+            hint = "/talos <question> for Talos queries" if domain == "talos" else "/ask <question> for visa slots"
+            await asyncio.to_thread(
+                self._api_json,
+                "sendMessage",
+                {"chat_id": chat_id, "text": f"Usage: {hint}."},
+            )
+            return
+
+        if len(question) > 1500:
+            await asyncio.to_thread(
+                self._api_json,
+                "sendMessage",
+                {"chat_id": chat_id, "text": "Please keep each question under 1,500 characters."},
+            )
+            return
+
+        if domain == "talos":
+            if self.talos_scout is None or not getattr(self.talos_scout, "enabled", False):
+                await asyncio.to_thread(
+                    self._api_json,
+                    "sendMessage",
+                    {"chat_id": chat_id, "text": "Talos Scout service is not configured or LLM is offline."},
+                )
+                return
+            handler = self.talos_scout.execute_a2a_task
+            title = "Talos Scout 🚀"
+        else:
+            handler = self._visa_a2a_task_handler
+            title = "Visa Assistant 📌"
+
+        init_res = await asyncio.to_thread(
+            self._api_json,
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": f"⏳ Initializing {title} task...",
+                "disable_web_page_preview": "true",
+            },
+        )
+        msg_id = (init_res.get("result") or {}).get("message_id") if isinstance(init_res, dict) else None
+        if not msg_id:
+            msg_id = 1
+
+        user_msg = Message.from_text(question, role="user", context_id=str(chat_id))
+        task = await self.a2a_engine.submit_task(
+            context_id=str(chat_id),
+            message=user_msg,
+            handler=handler,
+            metadata={"domain": domain, "chat_id": str(chat_id)},
+        )
+
+        short_id = task.id[:8]
+        await asyncio.to_thread(
+            self._edit_message_text,
+            chat_id,
+            msg_id,
+            f"⏳ [Task #{short_id}] State: WORKING\nProgress: Initializing engine...",
+        )
+
+        last_edit_time = time.monotonic()
+        last_rendered_text = ""
+        output_text: str | None = None
+        min_edit_interval = 1.0
+
+        try:
+            async for resp in self.a2a_engine.subscribe_task(task.id):
+                current_time = time.monotonic()
+                if resp.status_update:
+                    status = resp.status_update.status
+                    state = status.state
+                    step_msg = status.message or "In progress..."
+                    icon = "⏳" if state == TaskState.WORKING else ("✅" if state == TaskState.COMPLETED else "❌")
+
+                    new_text = f"{icon} [Task #{short_id}] State: {state.value}\nStatus: {step_msg}"
+
+                    if state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED}:
+                        pass
+                    elif (current_time - last_edit_time >= min_edit_interval) and (new_text != last_rendered_text):
+                        await asyncio.to_thread(self._edit_message_text, chat_id, msg_id, new_text)
+                        last_edit_time = current_time
+                        last_rendered_text = new_text
+
+                if resp.message:
+                    output_text = resp.message.get_text()
+
+                if resp.task:
+                    final_state = resp.task.status.state
+                    if final_state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED}:
+                        break
+
+            final_task = self.a2a_engine.get_task(task.id) or task
+            if final_task.status.state == TaskState.COMPLETED:
+                body = output_text or "Task completed successfully."
+                header = f"[{title}]\n[Task #{short_id}]\n\n"
+                suffix = "\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots." if disambiguated else ""
+                final_text = (header + body + suffix).strip()
+            elif final_task.status.state == TaskState.CANCELED:
+                final_text = f"🛑 [{title}]\n[Task #{short_id}] Task was canceled: {final_task.status.message}"
+            else:
+                final_text = f"❌ [{title}]\n[Task #{short_id}] Task failed: {final_task.status.message}"
+
+            await asyncio.to_thread(self._edit_or_send_long_text, chat_id, msg_id, final_text)
+
+        except Exception as exc:
+            LOGGER.exception("Error during A2A streaming to Telegram: %s", exc)
+            err_msg = f"⚠️ [Task #{short_id}] Streaming error: {exc}"
+            await asyncio.to_thread(self._edit_message_text, chat_id, msg_id, err_msg)
+
+    def _find_task_by_prefix(self, prefix: str) -> Task | None:
+        task = self.a2a_engine.get_task(prefix)
+        if task:
+            return task
+        recent = self.a2a_engine.list_tasks(limit=50)
+        cleaned_prefix = prefix.lower().replace("-", "")
+        for t in recent:
+            if t.id.startswith(prefix) or t.id.replace("-", "").startswith(cleaned_prefix):
+                return t
+        return None
+
+    async def _task_command(self, chat_id: str, subquery: str) -> str:
+        parts = subquery.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else "list"
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if subcmd == "list" or not subquery:
+            tasks = self.a2a_engine.list_tasks(context_id=chat_id, limit=10)
+            if not tasks:
+                tasks = self.a2a_engine.list_tasks(limit=5)
+            if not tasks:
+                return "No A2A tasks found."
+            lines = ["📋 **Recent A2A Tasks:**\n"]
+            for t in tasks:
+                status_icon = "⏳" if t.status.state == TaskState.WORKING else ("✅" if t.status.state == TaskState.COMPLETED else "❌")
+                query_preview = (t.history[0].get_text()[:40] + "...") if t.history else "No input"
+                lines.append(f"• `{t.id[:8]}` {status_icon} **{t.status.state.value}** — {query_preview}")
+            lines.append("\n💡 Use `/task get <id>` for full details or `/task cancel <id>` to cancel.")
+            return "\n".join(lines)
+
+        elif subcmd == "get":
+            if not arg:
+                return "Usage: /task get <task_id>"
+            task = self._find_task_by_prefix(arg)
+            if not task:
+                return f"Task `{arg}` not found."
+            status_icon = "⏳" if task.status.state == TaskState.WORKING else ("✅" if task.status.state == TaskState.COMPLETED else "❌")
+            lines = [
+                f"📋 **Task Information**",
+                f"• **ID:** `{task.id}`",
+                f"• **Context ID:** `{task.context_id}`",
+                f"• **State:** {status_icon} `{task.status.state.value}`",
+                f"• **Status Message:** {task.status.message or 'N/A'}",
+                f"• **Created:** {task.status.timestamp}",
+                f"• **Artifacts:** {len(task.artifacts)}",
+                f"• **Messages:** {len(task.history)}",
+            ]
+            if task.artifacts:
+                lines.append("\n📦 **Artifacts:**")
+                for a in task.artifacts:
+                    lines.append(f"  - `{a.artifact_id}`: {a.name} ({a.mime_type})")
+            if task.history:
+                agent_msgs = [m for m in task.history if m.role == "agent"]
+                if agent_msgs:
+                    preview = agent_msgs[-1].get_text()
+                    if len(preview) > 300:
+                        preview = preview[:300] + "..."
+                    lines.append(f"\n💬 **Output Preview:**\n{preview}")
+            return "\n".join(lines)
+
+        elif subcmd == "wait":
+            if not arg:
+                return "Usage: /task wait <task_id>"
+            task = self._find_task_by_prefix(arg)
+            if not task:
+                return f"Task `{arg}` not found."
+            if task.status.state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED}:
+                return f"Task `{task.id[:8]}` is already terminal: {task.status.state.value}"
+            try:
+                completed_task = await self.a2a_engine.wait_task(task.id, timeout=60.0)
+                if completed_task:
+                    return f"Task `{task.id[:8]}` finished with state: {completed_task.status.state.value}"
+                return f"Task `{task.id[:8]}` timed out waiting for completion."
+            except asyncio.TimeoutError:
+                return f"Timed out waiting for task `{task.id[:8]}` to finish."
+
+        elif subcmd == "cancel":
+            if not arg:
+                return "Usage: /task cancel <task_id>"
+            task = self._find_task_by_prefix(arg)
+            if not task:
+                return f"Task `{arg}` not found."
+            success = self.a2a_engine.cancel_task(task.id, reason="Cancelled via /task cancel")
+            if success:
+                return f"🛑 Successfully canceled task `{task.id[:8]}`."
+            return f"Could not cancel task `{task.id[:8]}` (already terminal or not found)."
+
+        else:
+            return (
+                "Usage:\n"
+                "• `/task list` (or `/tasks`) — list recent tasks\n"
+                "• `/task get <task_id>` — inspect task status and artifacts\n"
+                "• `/task wait <task_id>` — wait for running task to finish\n"
+                "• `/task cancel <task_id>` — cancel running task"
+            )
+
+    def _agentcard_command(self) -> str:
+        card = get_agent_card()
+        return (
+            "🤖 **Talos Scout A2A Agent Card (v1 Canonical)**\n\n"
+            f"• **Name:** {card['name']}\n"
+            f"• **Description:** {card['description']}\n"
+            f"• **DID:** `{card['did']}`\n"
+            f"• **Version:** {card['version']}\n"
+            f"• **Supported Modes:** {', '.join(card['supportedTaskModes'])}\n\n"
+            "**Skills:**\n"
+            + "\n".join(f"• `{s['id']}`: {s['name']} — {s['description']}" for s in card['skills'])
+            + "\n\n**Protocols:**\n"
+            + "\n".join(f"• {p['protocol']} ({p['role']})" for p in card['protocols'])
+        )
+
+    async def _rpc_command(self, raw_json: str) -> str:
+        if not raw_json:
+            return 'Usage: /rpc {"jsonrpc": "2.0", "id": 1, "method": "GetExtendedAgentCard"}'
+        try:
+            payload = json.loads(raw_json)
+        except Exception as exc:
+            return f"Invalid JSON payload: {exc}"
+        result = await self.a2a_rpc.dispatch(payload)
+        formatted = json.dumps(result, indent=2)
+        if len(formatted) > 3900:
+            formatted = formatted[:3900] + "\n... (truncated)"
+        return f"```json\n{formatted}\n```"
 
     def _send_typing_action(self, chat_id: str) -> None:
         try:
