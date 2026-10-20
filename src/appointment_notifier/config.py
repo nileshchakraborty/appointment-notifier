@@ -204,14 +204,14 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             timezone=os.getenv("TREND_TIMEZONE", "Asia/Kolkata").strip(),
             chat_history_messages=_int("OLLAMA_CHAT_HISTORY_MESSAGES", 8),
             context_tokens=_int("OLLAMA_CONTEXT_TOKENS", 2048),
-            response_tokens=_int("OLLAMA_RESPONSE_TOKENS", 220),
-            chat_timeout_seconds=_int("OLLAMA_CHAT_TIMEOUT_SECONDS", 150),
+            response_tokens=_int("OLLAMA_RESPONSE_TOKENS", 1500),
+            chat_timeout_seconds=_int("OLLAMA_CHAT_TIMEOUT_SECONDS", 180),
             provider_order=_csv("LLM_PROVIDER_ORDER")
             or ("fedora", "nvidia", "ollama_cloud", "ollama"),
             fedora_enabled=_bool("FEDORA_LLM_ENABLED", default=True),
             fedora_url=os.getenv("FEDORA_LLM_URL", "http://fedora.local:8080").rstrip("/"),
             fedora_model=os.getenv("FEDORA_LLM_MODEL", "deepseek-7b").strip(),
-            fedora_timeout_seconds=_int("FEDORA_LLM_TIMEOUT_SECONDS", 60),
+            fedora_timeout_seconds=_int("FEDORA_LLM_TIMEOUT_SECONDS", 180),
             nvidia_enabled=_bool("NVIDIA_NIM_ENABLED"),
             nvidia_url=os.getenv(
                 "NVIDIA_NIM_URL", "https://integrate.api.nvidia.com"

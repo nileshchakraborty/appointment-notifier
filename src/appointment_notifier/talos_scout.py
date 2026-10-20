@@ -21,6 +21,11 @@ Talos Protocol is a contract-driven platform and trust layer for autonomous AI a
 - Agent-to-Agent Communication: Forward-secret channels with Double Ratchet encryption (E2EE).
 - Granular Authorization: Capability-based tokens with deterministic scope matching.
 - Verifiable Audit: Audit events with Merkle proofs for cross-organizational accountability.
+- Core A2A Task Execution Lifecycle & Primitives:
+  * Task Immediate: Synchronous, low-latency execution (`tasks.send` immediate mode) for atomic tool invocations, quick queries, and deterministic RPCs.
+  * Task Wait: Asynchronous task tracking with long-poll / barrier synchronization (`tasks.wait`) for multi-step agent orchestrations and swarms.
+  * Task Get: Non-blocking task polling, state inspection, and artifact/output retrieval (`tasks.get`).
+  * A2A Task Stream: Real-time bidirectional streaming of task events, intermediate thoughts, token deltas, and live status (`tasks.stream` / SSE / WebSocket).
 - Target audience / High visibility partners: Autonomous agent frameworks, agent swarms/orchestrators, multi-agent platforms, agent toolkits, and agent marketplaces.
 
 Your goal is to analyze startups and founders from the "AI Founders Lounge" group chat and answer user questions.
@@ -29,7 +34,8 @@ Always provide concrete, actionable advice:
 1. Name of the Startup and Founder.
 2. What they build.
 3. Why partnering with them or integrating Talos Protocol gives Talos high visibility.
-4. A tailored, friendly outreach angle or hook.
+4. How they can leverage Talos A2A primitives (Task Immediate for instant tool invocations, Task Wait / Task Get for complex async workflows, and A2A Task Stream for live agent streaming).
+5. A tailored, friendly outreach angle or hook.
 """
 
 EXTRACTION_PROMPT = """You are an AI investment scout and tech analyst.
@@ -44,8 +50,8 @@ For each startup/product detected, extract a JSON array of objects with the exac
     "founder_handle": "WhatsApp handle, username, or phone if visible, or null",
     "pitch": "Concise 1-2 sentence description of what they are building",
     "tech_stack": "Mentioned tools, models, frameworks, or null",
-    "talos_synergy_score": 1 to 5 integer (5 = direct fit like agent frameworks, swarms, security, identity, messaging; 1 = unrelated B2C app),
-    "synergy_rationale": "Why this startup is or isn't relevant to Talos Protocol (agent trust, DIDs, E2EE, capability tokens)",
+    "talos_synergy_score": 1 to 5 integer (5 = direct fit like agent frameworks, swarms, security, identity, messaging, streaming; 1 = unrelated B2C app),
+    "synergy_rationale": "Why this startup is or isn't relevant to Talos Protocol (agent trust, DIDs, E2EE, capability tokens, Task Immediate, Task Wait, Task Get, A2A Task Stream)",
     "outreach_hook": "A 1-2 sentence message Nilesh can send to the founder proposing a Talos integration",
     "links": "Any mentioned website, GitHub, demo, or Twitter links, or null"
   }
@@ -267,10 +273,12 @@ class TalosScoutService:
             result = await asyncio.to_thread(
                 self.llm_client.complete,
                 messages,
-                max_tokens=600,
+                max_tokens=1500,
                 temperature=0.3,
             )
-            return result.content
+            raw = result.content
+            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            return cleaned or raw
         except Exception as exc:
             LOGGER.exception("Talos Scout LLM query failed")
             return f"Talos Scout query failed: {exc}"

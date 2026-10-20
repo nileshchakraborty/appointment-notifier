@@ -210,10 +210,16 @@ class TelegramBotCommandListener:
             },
         )
 
+    def _send_typing_action(self, chat_id: str) -> None:
+        try:
+            self._api_json("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        except Exception:
+            pass
+
     async def _smart_chat(self, chat_id: str, question: str) -> str:
         if not question:
             return "Usage: /ask <question> for visa slots or /talos <question> for Talos Protocol & startup outreach."
-        if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge)\b", question, re.I):
+        if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", question, re.I):
             ans = await self._talos_query(chat_id, question)
             return f"[Talos Scout 🚀]\n\n{ans}\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots."
         return await self._chat(chat_id, question)
@@ -225,11 +231,12 @@ class TelegramBotCommandListener:
             return "Usage: /talos <question> (e.g. /talos which startup can give Talos more visibility?)"
         if len(question) > 1500:
             return "Please keep each question under 1,500 characters."
+        await asyncio.to_thread(self._send_typing_action, chat_id)
         try:
-            return await asyncio.wait_for(self.talos_scout.answer(chat_id, question), timeout=120)
-        except Exception:
-            LOGGER.exception("Talos Scout request failed")
-            return "The Talos Scout AI is temporarily unavailable. Check /status for connectivity."
+            return await asyncio.wait_for(self.talos_scout.answer(chat_id, question), timeout=180)
+        except Exception as exc:
+            LOGGER.exception("Talos Scout request failed: %s", exc)
+            return f"The Talos Scout AI is temporarily unavailable ({exc}). Check /status for connectivity."
 
     def _startups_list(self, filter_term: str) -> str:
         if self.talos_scout is None:
@@ -260,13 +267,14 @@ class TelegramBotCommandListener:
             return "Usage: /ask <question>. You can also send normal text to chat."
         if len(question) > 1500:
             return "Please keep each question under 1,500 characters."
+        await asyncio.to_thread(self._send_typing_action, chat_id)
         try:
             service_settings = getattr(self.chat_service, "settings", None)
-            timeout = max(1, int(getattr(service_settings, "chat_timeout_seconds", 150)))
+            timeout = max(180, int(getattr(service_settings, "chat_timeout_seconds", 180)))
             return await asyncio.wait_for(self.chat_service.answer(chat_id, question), timeout=timeout)
-        except Exception:
-            LOGGER.exception("Pi-local chat request failed")
-            return "The Pi-local model is temporarily unavailable. Try again shortly or use /trend."
+        except Exception as exc:
+            LOGGER.exception("Pi-local chat request failed: %s", exc)
+            return f"The Pi-local model is temporarily unavailable ({exc}). Try again shortly or use /trend."
 
     async def _format_status(self) -> str:
         lines = ["System status:"]

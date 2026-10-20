@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -194,7 +195,7 @@ class FedoraLlmProvider:
         *,
         url: str = "http://fedora.local:8080",
         model: str = "deepseek-7b",
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 180,
         fallback_urls: tuple[str, ...] = ("http://192.168.1.250:8080",),
     ) -> None:
         self.url = url.rstrip("/")
@@ -217,12 +218,14 @@ class FedoraLlmProvider:
         temperature: float,
     ) -> str:
         headers = {"Content-Type": "application/json"}
+        # Ensure sufficient tokens for DeepSeek-R1 reasoning models so generation doesn't cut off inside <think>
+        effective_tokens = max(max_tokens, 1200)
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_tokens,
         }
         last_error = None
         for base_url in self._urls_to_try():
@@ -234,13 +237,18 @@ class FedoraLlmProvider:
                     timeout=self.timeout_seconds,
                 )
                 choices = data.get("choices") or []
-                content = str(((choices[0] if choices else {}).get("message") or {}).get("content") or "").strip()
+                msg = (choices[0] if choices else {}).get("message") or {}
+                content = str(msg.get("content") or "").strip()
+                if not content and msg.get("reasoning_content"):
+                    content = str(msg.get("reasoning_content") or "").strip()
                 if content:
-                    return content
+                    clean = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                    return clean or content
+                last_error = RuntimeError("LLM returned empty choices/content")
             except Exception as exc:
                 last_error = exc
                 LOGGER.debug("Fedora LLM request to %s failed: %s", base_url, exc)
-        raise LlmProviderError(f"Fedora LLM failed: {last_error}")
+        raise LlmProviderError(f"Fedora LLM failed: {last_error or 'empty response'}")
 
     def health(self) -> None:
         last_error = None
