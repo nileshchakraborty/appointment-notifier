@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 import logging
+import re
 import statistics
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -335,7 +336,12 @@ def format_report(report: TrendReport) -> str:
         lines.append(f"Broad historical window: {report.predicted_window_start} to {report.predicted_window_end}")
     lines.append("Caveat: " + report.caveat)
     if report.ocr_evidence:
-        lines.append("OCR evidence (cached, not authoritative): " + " | ".join(report.ocr_evidence))
+        sanitized_ocr = []
+        for item in report.ocr_evidence:
+            cleaned = re.sub(r"[A-Z][a-z]+ [A-Z][a-z]+ \(\d+\)", "[APPLICANT_REDACTED]", item)
+            cleaned = re.sub(r"\b\d{7,12}\b", "[ID_REDACTED]", cleaned)
+            sanitized_ocr.append(cleaned)
+        lines.append("OCR evidence (cached, not authoritative): " + " | ".join(sanitized_ocr))
     return "\n".join(lines)
 
 

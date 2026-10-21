@@ -220,8 +220,6 @@ class FedoraLlmProvider:
         headers = {"Content-Type": "application/json"}
         effective_tokens = max(max_tokens, 1500)
         prepared_messages = list(messages)
-        if prepared_messages and prepared_messages[-1].get("role") == "user":
-            prepared_messages.append({"role": "assistant", "content": "<think>\n</think>\n"})
 
         payload = {
             "model": self.model,

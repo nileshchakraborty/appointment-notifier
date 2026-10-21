@@ -49,12 +49,17 @@ class OllamaChatService:
             chat_id,
             self.settings.chat_history_messages,
         )
+        # Filter out history messages from unrelated Talos or company pricing discussions
+        filtered_history = [
+            m for m in history
+            if not TALOS_REDIRECT_PATTERN.search(str(m.get("content", "")))
+        ]
         messages = [
             {
                 "role": "system",
                 "content": _system_prompt(trusted_report),
             },
-            *history,
+            *filtered_history,
             {"role": "user", "content": question},
         ]
         result = await asyncio.to_thread(
@@ -83,14 +88,16 @@ def _system_prompt(trusted_report: str) -> str:
         "Be concise, practical, and honest about uncertainty. You may discuss the notifier, "
         "its observations, and general visa appointment concepts, but you cannot book slots, "
         "access the official portal, or provide legal advice. Never claim that a prediction is "
-        "an official embassy schedule. For trend questions, use the trusted report exactly as "
-        "given; do not recalculate, replace, or increase its confidence. For questions about the "
-        "next bulk appointment, use only the bulk history, bulk cadence, and next bulk-release "
-        "window fields; never substitute the all-post prediction or merely repeat the last bulk post. "
-        "Treat bulk-release posts "
-        "as release signals, not appointment counts. Treat individual availability reports as "
-        "community evidence only. Exclude NA heartbeats, invalid/ghost/unbookable reports, spam, "
-        "questions, and booked confirmations from availability claims. Never infer bookable slots "
-        "from an image alone. If the report lacks an answer, say so.\n\n"
+        "an official embassy schedule.\n\n"
+        "GUIDELINES FOR ANSWERING:\n"
+        "1. For questions about when appointments or slots were last available, seen, or posted, directly answer using the timestamps in the TRUSTED CURRENT REPORT:\n"
+        "   - Last OFC/biometrics post: cite exact timestamp\n"
+        "   - Last individual availability post: cite exact timestamp\n"
+        "   - Last bulk release post: cite exact timestamp\n"
+        "   - Last potential ghost slot post: cite exact timestamp\n"
+        "   Explain clearly that these represent community reports and telemetry observed by the notifier, not guaranteed live embassy inventory. Do NOT claim you lack real-time data or refuse to answer, because the trusted report below contains the real-time observations.\n"
+        "2. For questions about the next bulk appointment, use only the bulk history, bulk cadence, and next bulk-release window fields; never substitute the all-post prediction or merely repeat the last bulk post. Treat bulk-release posts as release signals, not appointment counts.\n"
+        "3. Exclude NA heartbeats, invalid/ghost/unbookable reports, spam, and questions from availability claims. Never infer bookable slots from an image alone.\n"
+        "4. If the report lacks an answer, state that clearly.\n\n"
         "TRUSTED CURRENT REPORT:\n" + trusted_report
     )
