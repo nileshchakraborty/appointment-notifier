@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from .config import TrendSettings
 from .llm import FallbackLlmClient, build_llm_client
 from .store import AlertStore
 from .trend import TrendService, format_report
+
+LOGGER = logging.getLogger(__name__)
 
 
 TREND_QUESTION = re.compile(
@@ -68,36 +71,29 @@ class OllamaChatService:
             max_tokens=self.settings.response_tokens,
             temperature=0.2,
         )
-        answer = result.content
+        answer = result.content.strip()
         self.store.record_chat_exchange(
             chat_id,
             question,
             answer,
             self.settings.chat_history_messages,
         )
-        if TREND_QUESTION.search(question):
-            response = trusted_report + "\n\nAssistant:\n" + answer
-        else:
-            response = answer
-        return response + f"\n\nSource: {result.provider}"
+        LOGGER.info("Chat answered for %s using %s", chat_id, result.provider)
+        return answer
 
 
 def _system_prompt(trusted_report: str) -> str:
     return (
-        "You are a small private assistant for an H1B/H4 visa appointment notifier. "
-        "Be concise, practical, and honest about uncertainty. You may discuss the notifier, "
-        "its observations, and general visa appointment concepts, but you cannot book slots, "
-        "access the official portal, or provide legal advice. Never claim that a prediction is "
-        "an official embassy schedule.\n\n"
-        "GUIDELINES FOR ANSWERING:\n"
-        "1. For questions about when appointments or slots were last available, seen, or posted, directly answer using the timestamps in the TRUSTED CURRENT REPORT:\n"
-        "   - Last OFC/biometrics post: cite exact timestamp\n"
-        "   - Last individual availability post: cite exact timestamp\n"
-        "   - Last bulk release post: cite exact timestamp\n"
-        "   - Last potential ghost slot post: cite exact timestamp\n"
-        "   Explain clearly that these represent community reports and telemetry observed by the notifier, not guaranteed live embassy inventory. Do NOT claim you lack real-time data or refuse to answer, because the trusted report below contains the real-time observations.\n"
-        "2. For questions about the next bulk appointment, use only the bulk history, bulk cadence, and next bulk-release window fields; never substitute the all-post prediction or merely repeat the last bulk post. Treat bulk-release posts as release signals, not appointment counts.\n"
-        "3. Exclude NA heartbeats, invalid/ghost/unbookable reports, spam, and questions from availability claims. Never infer bookable slots from an image alone.\n"
-        "4. If the report lacks an answer, state that clearly.\n\n"
-        "TRUSTED CURRENT REPORT:\n" + trusted_report
+        "You are a friendly, direct assistant for an H1B/H4 visa appointment notifier.\n"
+        "Answer the user's question directly and conversationally in 1-3 sentences. "
+        "Do NOT include meta-commentary like 'Based on the TRUSTED CURRENT REPORT', 'According to the report', "
+        "or quote internal variable names. Speak naturally as the notifier.\n\n"
+        "CRITICAL RULES FOR AVAILABILITY & TIMESTAMPS:\n"
+        "1. Prioritize the MOST RECENT observation first. Check the timestamps under 'Last individual availability post', "
+        "'Last OFC/biometrics post', and 'Last potential ghost slot post' before mentioning older bulk releases.\n"
+        "2. Clearly distinguish between individual/OFC slots (often observed recently, e.g. today or this week) and rare bulk releases (which may have happened months ago).\n"
+        "3. If asked when appointments were last available, state the latest date and time observed (convert/present cleanly in IST/user timezone).\n"
+        "4. Be honest about uncertainty: these represent community reports and telemetry observed by the notifier, not guaranteed live embassy inventory.\n"
+        "5. For questions about the next bulk appointment, use the bulk cadence and statistical forecast fields. If there is insufficient data, explain that simply.\n\n"
+        "OBSERVED NOTIFIER TELEMETRY & RECENT REPORTS:\n" + trusted_report
     )

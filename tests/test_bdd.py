@@ -85,7 +85,7 @@ def test_bdd_ask_bulk_question_returns_and_persists(tmp_path):
     response = asyncio.run(service.answer("chat-1", "when was the last bulk appointment"))
 
     # Then a provider response is returned and persisted
-    assert "Source: bdd-provider" in response
+    assert "Bulk release history is available in the trusted report." in response
     assert store.recent_chat_messages("chat-1", 4)[0]["content"] == "when was the last bulk appointment"
 
 

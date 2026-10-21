@@ -719,9 +719,8 @@ class TelegramBotCommandListener:
             final_task = self.a2a_engine.get_task(task.id) or task
             if final_task.status.state == TaskState.COMPLETED:
                 body = output_text or "Task completed successfully."
-                header = f"[{title}]\n[Task #{short_id}]\n\n"
                 suffix = "\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots." if disambiguated else ""
-                final_text = (header + body + suffix).strip()
+                final_text = (body + suffix).strip()
             elif final_task.status.state == TaskState.CANCELED:
                 final_text = f"🛑 [{title}]\n[Task #{short_id}] Task was canceled: {final_task.status.message}"
             else:

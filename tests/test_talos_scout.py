@@ -192,7 +192,7 @@ def test_bot_listener_talos_and_disambiguation(tmp_path):
             }
         })
     )
-    assert "[Talos Scout 🚀]" in sent["params"]["text"]
+    assert "AgentMesh" in sent["params"]["text"]
     assert "Tip: Use /talos <question>" in sent["params"]["text"]
 
 

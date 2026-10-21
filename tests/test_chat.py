@@ -42,9 +42,7 @@ def test_chat_persists_bounded_history_and_prefixes_trend(tmp_path) -> None:
 
     response = asyncio.run(service.answer("chat-1", "When is the next release?"))
 
-    assert response.startswith("Trend (Asia/Kolkata")
-    assert "Low confidence; keep monitoring." in response
-    assert response.endswith("Source: test-provider")
+    assert response == "Low confidence; keep monitoring."
     assert store.recent_chat_messages("chat-1", 10) == [
         {"role": "user", "content": "When is the next release?"},
         {"role": "assistant", "content": "Low confidence; keep monitoring."},
