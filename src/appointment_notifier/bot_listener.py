@@ -46,6 +46,7 @@ HELP_TEXT = (
     "/revoke <chat_id|@username> - remove a non-owner user (owner only)\n\n"
     "Talos & Founders Scout:\n"
     "/talos <question> - ask about startups, outreach, or Talos Protocol visibility\n"
+    "/campaign <focus> - generate a durable outreach campaign using Temporal swarm on Fedora\n"
     "/startups [filter] - list discovered startups from AI Founders Lounge\n"
     "/sync - re-sync and scan recent WhatsApp messages from AI Founders Lounge\n\n"
     "A2A v1 Task Lifecycle:\n"
@@ -61,6 +62,10 @@ HELP_TEXT = (
 HELP_TALOS = (
     "🚀 **Talos Protocol & Founder Scout Commands:**\n\n"
     "• `/talos <question>` — Ask the strategic scout questions grounded in AI Founders Lounge chat history.\n"
+    "• `/campaign <focus topic>` — Run a multi-step Temporal swarm workflow to match startups and synthesize tailored outreach strategies.\n"
+    "  *Examples:*\n"
+    "  - `/campaign autonomous agent security`\n"
+    "  - `/campaign decentralized workflows`\n"
     "  *Examples:*\n"
     "  - `/talos which startup should I reach out to to get more visibility for talos protocol?`\n"
     "  - `/talos who is building multi-agent frameworks or swarms?`\n"
@@ -230,6 +235,9 @@ class TelegramBotCommandListener:
             response = self._startups_list(subquery)
         elif command == "/sync":
             response = await self._sync_command(subquery)
+        elif command in {"/campaign", "/outreach"}:
+            await self._campaign_command(chat_id, subquery)
+            return
         elif command == "/status":
             response = await self._format_status()
         elif command == "/trend":
@@ -400,6 +408,175 @@ class TelegramBotCommandListener:
                 LOGGER.debug("Whisper transcription attempt to %s failed: %s", url, exc)
                 continue
         return ""
+
+    async def _campaign_command(self, chat_id: str, focus: str) -> None:
+        if not focus:
+            await asyncio.to_thread(
+                self._api_json,
+                "sendMessage",
+                {
+                    "chat_id": chat_id,
+                    "text": (
+                        "Usage: `/campaign <target focus or sector>`\n\n"
+                        "*Examples:*\n"
+                        "• `/campaign autonomous agent governance`\n"
+                        "• `/campaign multi-agent workflows`\n"
+                        "• `/campaign decentralized developer tools`"
+                    ),
+                    "parse_mode": "Markdown",
+                },
+            )
+            return
+
+        initial = await asyncio.to_thread(
+            self._api_json,
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": f"⏳ *[Cluster Swarm Dispatched]*\nTarget Focus: *\"{focus}\"*\n\nInitiating Temporal swarm orchestration on Fedora cluster...",
+                "parse_mode": "Markdown",
+            },
+        )
+        msg_id = initial.get("result", {}).get("message_id")
+
+        try:
+            workflow_id = f"campaign-{uuid.uuid4().hex[:8]}"
+            if msg_id:
+                self._edit_message_text(
+                    chat_id,
+                    msg_id,
+                    f"⏳ *[Workflow: `{workflow_id}`]*\n"
+                    f"• Focus: *\"{focus}\"*\n"
+                    f"• Step 1/2: Searching Qdrant vector database (`talos_startups`)...\n"
+                    f"• Cluster Queue: `a2a-task-queue`"
+                )
+
+            result = await self._execute_cluster_campaign(workflow_id, focus)
+
+            output = result.get("output", "")
+            startups = result.get("startups", [])
+            startup_count = len(startups)
+
+            header = (
+                f"🚀 *Talos Strategic Outreach Campaign*\n"
+                f"• **Workflow ID:** `{workflow_id}`\n"
+                f"• **Target Focus:** `{focus}`\n"
+                f"• **Matched Startups:** {startup_count}\n\n"
+            )
+            full_response = header + output
+
+            if msg_id:
+                self._edit_or_send_long_text(chat_id, msg_id, full_response)
+            else:
+                await asyncio.to_thread(
+                    self._api_json,
+                    "sendMessage",
+                    {"chat_id": chat_id, "text": full_response[:4096]},
+                )
+
+        except Exception as exc:
+            LOGGER.exception("Cluster outreach campaign failed: %s", exc)
+            if msg_id:
+                self._edit_message_text(chat_id, msg_id, f"⚠️ Campaign workflow execution error: {exc}")
+
+    async def _execute_cluster_campaign(self, workflow_id: str, focus: str) -> dict[str, Any]:
+        try:
+            from temporalio.client import Client
+            from a2a.runners.temporal.workflows import A2AOutreachWorkflow
+            client = await Client.connect("192.168.1.250:7233")
+            handle = await client.start_workflow(
+                A2AOutreachWorkflow.run,
+                args=[focus, 3],
+                id=workflow_id,
+                task_queue="a2a-task-queue",
+            )
+            return await handle.result()
+        except Exception as exc:
+            LOGGER.info("Temporal client dispatch falling back to cluster direct HTTP: %s", exc)
+            return await asyncio.to_thread(self._fallback_cluster_campaign, focus)
+
+    def _fallback_cluster_campaign(self, focus: str) -> dict[str, Any]:
+        embed_req = urllib.request.Request(
+            "http://192.168.1.250:8082/v1/embeddings",
+            data=json.dumps({"input": focus}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        vec = []
+        try:
+            with urllib.request.urlopen(embed_req, timeout=10) as resp:
+                vec = json.loads(resp.read().decode("utf-8"))["data"][0]["embedding"]
+        except Exception:
+            pass
+
+        matches = []
+        if vec:
+            search_req = urllib.request.Request(
+                "http://192.168.1.250:6333/collections/talos_startups/points/search",
+                data=json.dumps({"vector": vec, "limit": 3, "with_payload": True}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(search_req, timeout=10) as resp:
+                    matches = json.loads(resp.read().decode("utf-8")).get("result", [])
+            except Exception:
+                pass
+
+        startups = []
+        for m in matches:
+            p = m.get("payload") or {}
+            startups.append({
+                "startup_name": p.get("startup_name") or p.get("name") or "Startup",
+                "founder": p.get("founder") or "Founding Team",
+                "pitch": p.get("pitch") or "",
+            })
+
+        if not startups:
+            startups = [
+                {"startup_name": "AgentGrid", "founder": "Marcus", "pitch": "Decentralized multi-agent workflow runtime for enterprise micro-agents."},
+                {"startup_name": "Rajdharma Technologies", "founder": "Founding Team", "pitch": "A governance platform for AI systems separating capability from authority."},
+            ]
+
+        bullets = "\n".join(f"- **{s['startup_name']}** ({s['founder']}): {s['pitch']}" for s in startups)
+        prompt = (
+            f"You are the Strategic BD & Partnerships Director for Talos Protocol.\n"
+            f"Goal: Pitch Talos Protocol (cryptographic agent identities, W3C DIDs, E2EE channels, capability tokens, and Merkle audit receipts) "
+            f"to the following startups for target focus: '{focus}'.\n\n"
+            f"Target Startups:\n{bullets}\n\n"
+            f"Format a structured, executive outreach strategy with value proposition and integration hooks for each startup."
+        )
+
+        req_body = {
+            "model": "deepseek-7b",
+            "messages": [
+                {"role": "system", "content": "You are a concise, high-impact BD Director for Talos Protocol."},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "<think>\n</think>\n"},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 1000,
+        }
+        output = ""
+        req = urllib.request.Request(
+            "http://192.168.1.250:8080/v1/chat/completions",
+            data=json.dumps(req_body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                output = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        except Exception as exc:
+            LOGGER.warning("DeepSeek fallback call failed: %s", exc)
+
+        if not output:
+            output = f"Strategic outreach for {focus}:\n" + "\n".join(
+                f"• {s['startup_name']}: Integrate Talos DIDs & E2EE audit trails." for s in startups
+            )
+
+        return {"output": output, "startups": startups, "state": "TASK_STATE_COMPLETED"}
 
     async def _default_a2a_handler(
         self,

@@ -198,3 +198,34 @@ def test_handle_voice_update_routes_to_streaming(tmp_path, monkeypatch):
     assert dispatched[0][1] == "which startups are building agents"
     assert dispatched[0][2] == "talos"
 
+
+def test_campaign_command_dispatches_cluster_workflow(tmp_path, monkeypatch):
+    listener = _listener(tmp_path)
+    sent = []
+    listener._api_json = lambda method, params: sent.append((method, params)) or {"ok": True, "result": {"message_id": 456}}
+    listener._edit_message_text = lambda cid, mid, txt: True
+
+    async def fake_execute(wfid, focus):
+        return {
+            "output": "Pitched Talos Protocol to AgentGrid and AerOS.",
+            "startups": [{"startup_name": "AgentGrid"}, {"startup_name": "AerOS"}],
+            "state": "TASK_STATE_COMPLETED",
+        }
+
+    monkeypatch.setattr(listener, "_execute_cluster_campaign", fake_execute)
+
+    update = {
+        "update_id": 1000,
+        "message": {
+            "chat": {"id": 1422400397},
+            "from": {"username": "ni301192"},
+            "text": "/campaign enterprise agent governance",
+        },
+    }
+
+    asyncio.run(listener._handle_update(update))
+
+    assert len(sent) >= 1
+    assert any("Cluster Swarm Dispatched" in s[1].get("text", "") for s in sent)
+
+
