@@ -1,17 +1,80 @@
-# Appointment Notifier
+# Appointment Notifier & Talos Agent Node
 
-Watches `@Regular_H1B_H4_VisaSlotsChecking` on Telegram and notifies you by Telegram bot, email, SMS, WhatsApp, and/or iMessage when a message looks like an available H1B/H4 visa appointment slot.
+Autonomous edge monitoring agent and **Talos Protocol Agent-to-Agent (A2A)** node.
+Watches `@Regular_H1B_H4_VisaSlotsChecking` on Telegram, monitors the WhatsApp Founders Lounge, performs RAG prospect scoring with Qdrant, serves A2A protocol endpoints, and notifies you across Telegram, WhatsApp, SMS, email, and iMessage.
 
-## Phase 1 Scope
+---
 
-- Connects to Telegram using your own Telegram API credentials.
-- Watches the configured channel in real time.
-- Checks a small recent-message backlog on startup.
-- Suppresses common "no slots" messages.
-- Deduplicates alerts in SQLite so restarts do not spam you.
-- Supports Telegram bot, SMTP email, Twilio SMS, self-hosted OpenWA or Twilio WhatsApp, and local macOS iMessage notifications.
+## Architecture Overview
 
-## Setup
+```mermaid
+flowchart TD
+    subgraph Ingestion["Edge Ingestion Sources"]
+        TGChannel["Telegram Channel\n(@Regular_H1B_H4_VisaSlotsChecking)"]
+        WALounge["WhatsApp Founders Lounge\n(OpenWA Web Automation)"]
+        VoiceInput["Telegram Voice Notes\n(.ogg / Opus Audio)"]
+    end
+
+    subgraph EdgeNode["Raspberry Pi 5 (Edge Node 192.168.1.229)"]
+        Bot["Telegram Bot & Command Listener"]
+        Store["SQLite Persistent Store\n(State, Checkpoints, A2A Tasks)"]
+        A2A["A2A Protocol Engine\n(In-Memory + Temporal Runners)"]
+        Scout["Talos Scout Service\n(Disambiguation & RAG Engine)"]
+        
+        Bot --> Store
+        Bot --> A2A
+        A2A --> Scout
+    end
+
+    subgraph InferenceCluster["Fedora AI Cluster (192.168.1.250)"]
+        FedoraLLM["DeepSeek-R1-Distill-Qwen-7B\n(llama-server gRPC/HTTP :8080)"]
+        TemporalServer["Temporal Workflow Cluster\n(gRPC :7233 / Web UI :8233)"]
+        Qdrant["Qdrant Vector DB (:6333)\n(Founder Profiles & Semantic Index)"]
+        
+        A2A -.->|"Distributed Workflows"| TemporalServer
+        Scout -->|"Vector RAG Search"| Qdrant
+        Bot -->|"High-Performance Inference"| FedoraLLM
+    end
+
+    subgraph Fallbacks["Hosted Fallback Chain"]
+        NIM["NVIDIA NIM\n(OpenAI-compatible)"]
+        OCloud["Ollama Cloud"]
+        LocalOllama["Pi-Local Ollama\n(gemma3:1b)"]
+        
+        FedoraLLM -.->|"HTTP 429/Offline"| NIM
+        NIM -.-> OCloud
+        OCloud -.-> LocalOllama
+    end
+```
+
+---
+
+## Key Capabilities
+
+1. **Autonomous Visa Monitoring**:
+   - Real-time Telegram channel monitoring with startup backlog replay.
+   - Deterministic slot parsing (H1B/H4 Dropbox, consular, biometrics, bulk release detection).
+   - Tesseract OCR layout parsing with SHA-256 media caching for screenshot-based availability claims.
+   - Clean, direct conversational answers without raw telemetry or task header spam.
+2. **Talos Protocol & Founder Scout**:
+   - Real-time WhatsApp Founders Lounge community monitor (`WhatsAppWatcher`).
+   - Strategic founder prospect analysis, capability matching, and B2B partnership recommendations (`/talos`).
+   - Qdrant vector database semantic search over founder profiles and startup offerings.
+3. **Agent-to-Agent (A2A) v1 Standard**:
+   - Compliant W3C Agent Card discovery at `/.well-known/agent.json`.
+   - JSON-RPC 2.0 task execution API at `/rpc` (`tasks/send`, `tasks/get`, `tasks/cancel`, `tasks/list`).
+   - Real-time streaming task execution with live progress reporting on Telegram.
+   - Pluggable runners: `InMemoryTaskRunner` for edge sub-second responsiveness, `TemporalTaskRunner` for durable multi-step workflows.
+4. **Resilient Multi-Tier LLM Offload**:
+   - Primary: High-speed local GPU inference via `DeepSeek-R1-Distill-Qwen-7B` on Fedora (`192.168.1.250:8080`).
+   - Automatic reasoning-trace (`<think>`) extraction for clean user answers.
+   - Graceful fallback chain: NVIDIA NIM → Ollama Cloud → Pi-local Ollama (`gemma3:1b`).
+5. **Multi-Channel Alerting**:
+   - Telegram Bot, WhatsApp (OpenWA v5 alpha self-hosted or Twilio), SMS (Twilio), SMTP email, and macOS iMessage.
+
+---
+
+## Setup & Quickstart
 
 ```bash
 python3 -m venv .venv
@@ -29,18 +92,115 @@ set +a
 appointment-notifier run
 ```
 
-The first Telegram run will ask for your phone login code and create the session file at `TELEGRAM_SESSION_PATH`.
+---
 
-## Commands
+## CLI Commands
 
 ```bash
-appointment-notifier run
-appointment-notifier test-notify
+# Core execution
+appointment-notifier run                     # Start Telegram & WhatsApp watchers, A2A engine, bot
+appointment-notifier test-notify             # Send test alerts across all enabled notification channels
+
+# Telemetry & analysis
 appointment-notifier parse-text "H1B Dropbox slots available in Chennai"
-appointment-notifier trend
-appointment-notifier trend --no-llm
+appointment-notifier trend                   # Display statistical release cadence & historical window
+appointment-notifier trend --no-llm          # Output pure deterministic metrics without LLM summary
 appointment-notifier ask "When are appointments usually posted?"
+appointment-notifier backfill --chat @Regular_H1B_H4_VisaSlotsChecking --limit 5000
 ```
+
+---
+
+## Telegram Bot Commands
+
+| Command | Role | Description |
+|---|---|---|
+| `/ask <question>` | All Users | Ask a visa appointment question; replies with direct conversational response. |
+| `/talos <question>` | All Users | Query Talos Scout for startup analysis, partnership matches, and founder outreach. |
+| `/current` | All Users | Check current boolean slot availability state. |
+| `/last` | All Users | Display last observed slot observation and timestamp. |
+| `/trend` | All Users | View full statistical trend report and release cadence forecast. |
+| `/task list` | All Users | List recent A2A autonomous tasks and current states. |
+| `/task get <id>` | All Users | Inspect detailed status and messages for an A2A task. |
+| `/task cancel <id>` | All Users | Cancel an in-progress A2A task. |
+| `/campaign <name>` | Owner | Dispatch a distributed Temporal swarm campaign across agent workers. |
+| `/status` | All Users | Check health of local services, Fedora LLM, Qdrant, and A2A engine. |
+| `/whoami` | All Users | View your numeric chat ID, username, and role. |
+| `/forget` | All Users | Clear conversational history for the current chat session. |
+| `/users` | Owner | List authorized command users and owners. |
+| `/allow <id\|@user> [owner]` | Owner | Authorize a new user or owner. |
+| `/revoke <id\|@user>` | Owner | Revoke an authorized user. |
+| `/help [visa\|talos]` | All Users | Show help documentation for visa or Talos commands. |
+
+*Voice Notes:* Sending an audio voice note to the bot automatically transcribes the audio, runs A2A streaming task processing, and edits the message in place with the final answer.
+
+---
+
+## Agent-to-Agent (A2A) v1 Specification
+
+The node exposes native A2A v1 protocol endpoints:
+
+### 1. Agent Discovery Card
+```http
+GET /.well-known/agent.json
+```
+Returns:
+```json
+{
+  "name": "Visa & Talos Multi-Agent Node",
+  "description": "Autonomous visa monitoring and Talos Protocol founder intelligence agent",
+  "version": "1.0.0",
+  "endpoints": {
+    "rpc": "/rpc"
+  },
+  "capabilities": {
+    "streaming": true,
+    "multimodal": ["text", "audio"]
+  },
+  "skills": [
+    {"id": "visa_availability", "name": "Visa Slot Monitor"},
+    {"id": "talos_scout", "name": "Talos Startup Scout"}
+  ]
+}
+```
+
+### 2. JSON-RPC 2.0 Execution
+```http
+POST /rpc
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "method": "tasks/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "parts": [{"text": "When was the last visa available?"}]
+    }
+  },
+  "id": "req-01"
+}
+```
+
+---
+
+## Inference Configuration (Fedora & Fallbacks)
+
+The LLM client dynamically resolves inference endpoints in priority order:
+
+1. **Fedora Remote Server (`fedora`):**
+   - Address: `http://192.168.1.250:8080`
+   - Model: `DeepSeek-R1-Distill-Qwen-7B`
+   - High speed GPU offload, zero token costs, local network security.
+2. **NVIDIA NIM (`nvidia`):**
+   - Configured via `.secrets/nvidia_api_key`.
+   - Hosted high-throughput fallback.
+3. **Ollama Cloud (`ollama_cloud`):**
+   - Configured via `.secrets/ollama_api_key`.
+4. **Pi Local Ollama (`ollama`):**
+   - Local `gemma3:1b` model running as a native systemd service on the Pi (`http://192.168.1.229:11434`).
+
+---
 
 ## Notification Notes
 
