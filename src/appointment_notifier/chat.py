@@ -14,6 +14,11 @@ TREND_QUESTION = re.compile(
     re.IGNORECASE,
 )
 
+TALOS_REDIRECT_PATTERN = re.compile(
+    r"(?:talos|talosprotocol|startup|startups|founder|founders|customer|customers|prospect|prospects|pitch|outreach|partnership|partnerships|sell|selling|buyer|buyers|\bagents?\b|\bswarms?\b|lounge|a2a|\btasks?\b|\bstream\b|\bimmediate\b|\bwait\b|\bget\b|protocol)",
+    re.IGNORECASE,
+)
+
 
 class OllamaChatService:
     def __init__(
@@ -33,6 +38,11 @@ class OllamaChatService:
         return self.llm_client.enabled
 
     async def answer(self, chat_id: str, question: str) -> str:
+        if TALOS_REDIRECT_PATTERN.search(question):
+            return (
+                "💡 This query appears to be for Talos Protocol & Startup Scout.\n\n"
+                f"Please use: `/talos {question}` to query the strategic scout with live vector search."
+            )
         report = self.trend_service.report()
         trusted_report = format_report(report)
         history = self.store.recent_chat_messages(

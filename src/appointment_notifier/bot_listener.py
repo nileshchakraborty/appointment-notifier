@@ -24,6 +24,11 @@ from .trend import TrendService
 
 LOGGER = logging.getLogger(__name__)
 
+TALOS_ROUTING_PATTERN = re.compile(
+    r"(?:talos|talosprotocol|startup|startups|founder|founders|customer|customers|prospect|prospects|pitch|outreach|partnership|partnerships|sell|selling|buyer|buyers|\bagents?\b|\bswarms?\b|lounge|a2a|\btasks?\b|\bstream\b|\bimmediate\b|\bwait\b|\bget\b|protocol)",
+    re.IGNORECASE,
+)
+
 HELP_TEXT = (
     "Commands:\n"
     "/start - show this command list\n"
@@ -229,7 +234,7 @@ class TelegramBotCommandListener:
             else:
                 response = await self.trend_service.summarize_async()
         elif command == "/ask":
-            if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", subquery, re.I):
+            if TALOS_ROUTING_PATTERN.search(subquery):
                 await self._dispatch_a2a_streaming(chat_id, subquery, domain="talos", disambiguated=True)
             else:
                 await self._dispatch_a2a_streaming(chat_id, subquery, domain="visa")
@@ -258,7 +263,7 @@ class TelegramBotCommandListener:
                 "⚙️ General: /status, /whoami, /forget, /help"
             )
         else:
-            if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", text, re.I):
+            if TALOS_ROUTING_PATTERN.search(text):
                 await self._dispatch_a2a_streaming(chat_id, text, domain="talos")
                 return
             else:
@@ -596,7 +601,7 @@ class TelegramBotCommandListener:
     async def _smart_chat(self, chat_id: str, question: str) -> str:
         if not question:
             return "Usage: /ask <question> for visa slots or /talos <question> for Talos Protocol & startup outreach."
-        if re.search(r"\b(?:talos|startup|startups|founder|founders|agent|agents|swarms|lounge|a2a|task|tasks|stream|immediate|wait|get)\b", question, re.I):
+        if TALOS_ROUTING_PATTERN.search(question):
             ans = await self._talos_query(chat_id, question)
             return f"[Talos Scout 🚀]\n\n{ans}\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots."
         return await self._chat(chat_id, question)
