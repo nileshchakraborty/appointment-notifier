@@ -52,8 +52,21 @@ The `appointment-notifier` repository serves as the operational host and gateway
 - Packages multimodal payloads (voice PCM / video keyframes).
 - Verifies and attaches Merkle audit receipts to outbound agent responses.
 
+### 2.4 Multimodal Voice Pipeline (`src/appointment_notifier/bot_listener.py`)
+- **Telegram Voice Note Ingestion:** Detects audio/voice Telegram updates, downloads raw Opus/OGA payload via Telegram Bot API `getFile`.
+- **Fedora Whisper Service:** Dispatches audio bytes to `faster-whisper` (running `base.en` with int8 quantization on Fedora `192.168.1.250:8084`).
+- **Autonomous Dispatch:** Emits transcribed text preview (`🎙️ Heard: "<transcript>"`) and routes directly into the A2A streaming execution engine.
+
+### 2.5 Distributed Temporal Engine (`talosprotocol/a2a`)
+- **Temporal Server:** Running on Fedora AI cluster (`192.168.1.250:7233`, Web UI on `:8233`).
+- **Worker Fleet:** `temporal-worker.service` actively polling `a2a-task-queue` for durable multi-day agent swarms, scheduled workflows, and batch lounge analyses.
+
 ---
 
 ## 3. Production Deployment
 - **Edge Runtime:** Raspberry Pi 4 (`rpi@192.168.1.229`), running containerized Docker instance `appointment-notifier`.
-- **Inference Host:** Fedora Server (`nilesh@192.168.1.250`) hosting llama-server and Qdrant vector database.
+- **Inference & Orchestration Host:** Fedora Server (`nilesh@192.168.1.250`) hosting:
+  - `llama-server` (DeepSeek-R1 local LLM on `:8080`, embeddings on `:8082`)
+  - `qdrant` (Vector store on `:6333`)
+  - `temporal` (Server on `:7233`, UI on `:8233`, worker fleet `temporal-worker.service`)
+  - `whisper-service` (FastAPI `faster-whisper` STT on `:8084`)
