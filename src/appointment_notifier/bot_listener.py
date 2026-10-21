@@ -7,6 +7,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 from .a2a import (
@@ -197,6 +198,9 @@ class TelegramBotCommandListener:
             )
             return
         if not text:
+            voice = message.get("voice") or message.get("audio")
+            if voice and getattr(self.settings, "whisper_enabled", True):
+                await self._handle_voice_update(chat_id, voice)
             return
 
         parts = text.split()
@@ -311,6 +315,91 @@ class TelegramBotCommandListener:
                     "sendMessage",
                     {"chat_id": str(chat_id), "text": chunk, "disable_web_page_preview": "true"},
                 )
+
+    async def _handle_voice_update(self, chat_id: str, voice: dict[str, Any]) -> None:
+        file_id = voice.get("file_id")
+        if not file_id:
+            return
+
+        initial = await asyncio.to_thread(
+            self._api_json,
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": "🎤 *Transcribing voice note...*",
+                "parse_mode": "Markdown",
+            },
+        )
+        msg_id = initial.get("result", {}).get("message_id")
+
+        download_res = await asyncio.to_thread(self._download_telegram_file, file_id)
+        if not download_res:
+            if msg_id:
+                self._edit_message_text(chat_id, msg_id, "⚠️ Failed to download voice note from Telegram.")
+            return
+
+        audio_bytes, file_name = download_res
+        transcript = await asyncio.to_thread(self._transcribe_audio, audio_bytes, file_name)
+        if not transcript:
+            if msg_id:
+                self._edit_message_text(chat_id, msg_id, "⚠️ Could not transcribe audio (no speech detected).")
+            return
+
+        LOGGER.info("Transcribed voice note from chat %s: %s", chat_id, transcript)
+        if msg_id:
+            self._edit_message_text(chat_id, msg_id, f"🎙️ *Heard:*\n\"{transcript}\"\n\n⏳ *Processing...*")
+
+        if TALOS_ROUTING_PATTERN.search(transcript):
+            await self._dispatch_a2a_streaming(chat_id, transcript, domain="talos")
+        else:
+            await self._dispatch_a2a_streaming(chat_id, transcript, domain="visa")
+
+    def _download_telegram_file(self, file_id: str) -> tuple[bytes, str] | None:
+        try:
+            res = self._api_json("getFile", {"file_id": file_id})
+            file_path = res.get("result", {}).get("file_path")
+            if not file_path:
+                return None
+            file_url = f"https://api.telegram.org/file/bot{self.settings.bot_token}/{file_path}"
+            req = urllib.request.Request(file_url, headers={"User-Agent": "AppointmentNotifierBot/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                audio_bytes = response.read()
+                filename = file_path.split("/")[-1] or "voice.oga"
+                return audio_bytes, filename
+        except Exception as exc:
+            LOGGER.exception("Failed to download Telegram file %s: %s", file_id, exc)
+            return None
+
+    def _transcribe_audio(self, audio_bytes: bytes, filename: str) -> str:
+        boundary = "----WebKitFormBoundary" + uuid.uuid4().hex
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: audio/ogg\r\n\r\n"
+        ).encode("utf-8") + audio_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        }
+
+        urls = [self.settings.whisper_url]
+        if "fedora.local" in self.settings.whisper_url:
+            urls.append(self.settings.whisper_url.replace("fedora.local", "192.168.1.250"))
+        elif "192.168.1.250" in self.settings.whisper_url:
+            urls.append(self.settings.whisper_url.replace("192.168.1.250", "fedora.local"))
+
+        for base_url in urls:
+            url = f"{base_url.rstrip('/')}/v1/audio/transcriptions"
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return (data.get("text") or "").strip()
+            except Exception as exc:
+                LOGGER.debug("Whisper transcription attempt to %s failed: %s", url, exc)
+                continue
+        return ""
 
     async def _default_a2a_handler(
         self,

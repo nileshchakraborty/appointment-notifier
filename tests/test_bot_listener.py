@@ -165,3 +165,36 @@ def test_status_reports_backend_and_ai_health(tmp_path):
     assert "Telegram Bot API: connected" in response
     assert "AI nvidia: unavailable (HTTP 401)" in response
     assert "AI ollama: connected" in response
+
+
+def test_handle_voice_update_routes_to_streaming(tmp_path, monkeypatch):
+    listener = _listener(tmp_path)
+    sent_messages = []
+    listener._api_json = lambda method, params: {"ok": True, "result": {"message_id": 123}}
+    listener._download_telegram_file = lambda file_id: (b"fake_audio_bytes", "voice.oga")
+    listener._transcribe_audio = lambda audio, filename: "which startups are building agents"
+
+    dispatched = []
+
+    async def fake_dispatch(chat_id, query, domain):
+        dispatched.append((chat_id, query, domain))
+
+    monkeypatch.setattr(listener, "_dispatch_a2a_streaming", fake_dispatch)
+    monkeypatch.setattr(listener, "_edit_message_text", lambda cid, mid, txt: True)
+
+    update = {
+        "update_id": 999,
+        "message": {
+            "chat": {"id": 1422400397},
+            "from": {"username": "ni301192"},
+            "voice": {"file_id": "voice_file_123"},
+        },
+    }
+
+    asyncio.run(listener._handle_update(update))
+
+    assert len(dispatched) == 1
+    assert dispatched[0][0] == "1422400397"
+    assert dispatched[0][1] == "which startups are building agents"
+    assert dispatched[0][2] == "talos"
+

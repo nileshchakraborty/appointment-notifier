@@ -42,6 +42,8 @@ class TelegramAlertSettings:
     allowed_usernames: tuple[str, ...]
     owner_chat_ids: tuple[str, ...]
     owner_usernames: tuple[str, ...]
+    whisper_url: str = "http://fedora.local:8084"
+    whisper_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,8 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             allowed_usernames=_csv("TELEGRAM_BOT_ALLOWED_USERNAMES"),
             owner_chat_ids=_csv("TELEGRAM_BOT_OWNER_CHAT_ID"),
             owner_usernames=_csv("TELEGRAM_BOT_OWNER_USERNAMES"),
+            whisper_url=os.getenv("WHISPER_URL", "http://fedora.local:8084"),
+            whisper_enabled=_bool("WHISPER_ENABLED", True),
         ),
         email=EmailSettings(
             enabled=_bool("EMAIL_ENABLED"),
