@@ -18,6 +18,16 @@ ALLOWED_A2A_METHODS = {
     "ListTasks",
     "GetExtendedAgentCard",
     "agent/getAuthenticatedExtendedCard",
+    "agent/card",
+    "agent.card",
+    "tasks/send",
+    "tasks.send",
+    "tasks/get",
+    "tasks.get",
+    "tasks/cancel",
+    "tasks.cancel",
+    "tasks/list",
+    "tasks.list",
 }
 
 
@@ -53,11 +63,11 @@ class A2AJsonRpcDispatcher:
             }
 
         try:
-            if method in {"GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard"}:
+            if method in {"GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard", "agent/card", "agent.card"}:
                 card = get_agent_card()
                 return {"jsonrpc": "2.0", "id": req_id, "result": card}
 
-            elif method == "SendMessage":
+            elif method in {"SendMessage", "tasks/send", "tasks.send"}:
                 msg_data = params.get("message")
                 if not msg_data or not isinstance(msg_data, dict):
                     return {
@@ -94,8 +104,8 @@ class A2AJsonRpcDispatcher:
                         },
                     }
 
-            elif method == "GetTask":
-                task_id = params.get("taskId")
+            elif method in {"GetTask", "tasks/get", "tasks.get"}:
+                task_id = params.get("taskId") or params.get("id")
                 if not task_id:
                     return {
                         "jsonrpc": "2.0",
@@ -110,6 +120,25 @@ class A2AJsonRpcDispatcher:
                         "error": {"code": -32000, "message": "Task not found", "data": {"taskId": task_id}},
                     }
                 return {"jsonrpc": "2.0", "id": req_id, "result": {"task": task.to_dict()}}
+
+            elif method in {"CancelTask", "tasks/cancel", "tasks.cancel"}:
+                task_id = params.get("taskId") or params.get("id")
+                if not task_id:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32602, "message": "Invalid params", "data": {"details": "taskId required"}},
+                    }
+                ok = self.engine.cancel_task(str(task_id), reason=params.get("reason", "Canceled via A2A CancelTask"))
+                return {"jsonrpc": "2.0", "id": req_id, "result": {"taskId": task_id, "canceled": ok}}
+
+            elif method in {"ListTasks", "tasks/list", "tasks.list"}:
+                context_id = params.get("contextId")
+                state_str = params.get("state")
+                state = TaskState.from_str(state_str) if state_str else None
+                limit = int(params.get("limit", 20))
+                tasks = self.engine.list_tasks(context_id=context_id, state=state, limit=limit)
+                return {"jsonrpc": "2.0", "id": req_id, "result": {"tasks": [t.to_dict() for t in tasks]}}
 
             elif method == "SubscribeToTask":
                 task_id = params.get("taskId")
