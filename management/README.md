@@ -85,6 +85,26 @@ these services and verify application state before declaring success.
    an update regression while preserving the same mounts. Recheck OpenWA
    connectivity, Kafka, worker count, and actual alert delivery.
 
+### OpenWA onboarding dialog after QR pairing
+
+On 2026-10-31, two freshly paired sessions reached `ready` but navigated to
+`?post_logout=1` around five minutes later; the phone also removed the linked
+device. Docker had not restarted or OOM-killed OpenWA, and its API received
+only health checks. A third session showed a visible **What's new on WhatsApp
+Web** dialog with a **Continue** button. After clicking Continue, the session
+remained connected beyond the prior five-minute failure point. This is strong
+evidence that the unacknowledged dialog caused the repeated unlinks, though
+the bounded observation does not prove long-term stability.
+
+After any future QR pairing, inspect the browser for that dialog before
+declaring recovery complete. From a checkout with this repository on Fedora,
+`docker exec -i openwa node - < management/openwa-dismiss-onboarding.cjs`
+clicks only the visible English-language WhatsApp Web onboarding dialog's
+Continue button. It reports `dialog_absent` if no matching dialog is open.
+Verify authenticated `/health` has both `connected` and `session.ready` true
+and monitor through the next five-minute reload. Do not remove the persisted
+profile or automatically re-pair on a health failure.
+
 Install the script at `/opt/docker-weekly-maintenance.py` on both hosts and the
 matching unit and timer files under `/etc/systemd/system/`. Test with
 `python3 /opt/docker-weekly-maintenance.py --host fedora --dry-run` (or `pi`),
