@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Recreate explicitly selected, currently running Compose services once a week.
+"""Recreate selected stateless Compose services once a week.
 
-Persistent volumes and bind mounts are never pruned. A failed health check stops
-the run and leaves the service available for diagnosis.
+Authentication, queues, databases, and DNS are checked but never recreated by
+this timer. Persistent volumes, bind mounts, and rollback images are not pruned.
 """
 
 import argparse
@@ -18,22 +18,30 @@ from pathlib import Path
 
 HOST_SERVICES = {
     "fedora": [
-        ("appointment-notifier-fedora", "kafka"),
-        ("appointment-notifier-fedora", "appointment-notifier"),
-        ("appointment-notifier-fedora", "telegram-delivery"),
-        ("compute-stack", "redis"),
-        ("compute-stack", "qdrant"),
-        ("streambert", "redis"),
-        ("streambert-production", "streambert-queue-redis"),
-        ("streambert-production", "streambert-cache-redis"),
         ("streambert-production", "streambert-api"),
         ("streambert-production", "streambert-worker"),
         ("ollama-fedora", "ollama"),
         ("portainer-agent", "portainer-agent"),
-        ("portainer-server", "portainer"),
-        ("openwa-fedora", "openwa"),
     ],
-    "pi": [("dns-management", "pihole")],
+    "pi": [],
+}
+
+# Expected running replicas for services with durable state or login sessions.
+# These are monitored and deliberately excluded from unattended recreation.
+PROTECTED_SERVICES = {
+    "fedora": [
+        ("appointment-notifier-fedora", "kafka", 1),
+        ("appointment-notifier-fedora", "appointment-notifier", 1),
+        ("appointment-notifier-fedora", "telegram-delivery", 3),
+        ("openwa-fedora", "openwa", 1),
+        ("compute-stack", "redis", 1),
+        ("compute-stack", "qdrant", 1),
+        ("streambert", "redis", 1),
+        ("streambert-production", "streambert-queue-redis", 1),
+        ("streambert-production", "streambert-cache-redis", 1),
+        ("portainer-server", "portainer", 1),
+    ],
+    "pi": [("dns-management", "pihole", 1)],
 }
 
 
@@ -52,6 +60,26 @@ def running_service(project, service):
         "--filter", f"label=com.docker.compose.service={service}",
     ]).stdout.splitlines()
     return [inspect(container_id) for container_id in ids]
+
+
+def verify_protected(host):
+    for project, service, expected in PROTECTED_SERVICES[host]:
+        containers = running_service(project, service)
+        states = [item["State"].get("Health", {}).get("Status", item["State"]["Status"])
+                  for item in containers]
+        if len(containers) != expected or any(state not in ("healthy", "running") for state in states):
+            raise RuntimeError(f"Protected service needs attention: {project}/{service}: {states}, expected {expected}")
+        logging.info("protected %s/%s: %s", project, service, states)
+    if host == "fedora":
+        code = (
+            "require('http').get({host:'127.0.0.1',port:8081,path:'/health',"
+            "headers:{'X-API-Key':process.env.WA_API_KEY}},r=>{let b='';"
+            "r.on('data',c=>b+=c);r.on('end',()=>{try{const d=JSON.parse(b);"
+            "process.exit(r.statusCode===200&&d.connected===true&&d.session?.ready===true?0:1)"
+            "}catch{process.exit(1)}})}).on('error',()=>process.exit(1))"
+        )
+        if run(["docker", "exec", "openwa", "node", "-e", code], check=False).returncode:
+            raise RuntimeError("OpenWA session is disconnected; protected service maintenance halted")
 
 
 def compose_command(container):
@@ -115,6 +143,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     with open(f"/tmp/docker-weekly-maintenance-{os.geteuid()}.lock", "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        verify_protected(args.host)
         targets = HOST_SERVICES[args.host]
         if args.only:
             targets = [(project, service) for project, service in targets
@@ -126,8 +155,7 @@ def main():
             if maintain(project, service, args.dry_run) == "unhealthy":
                 unhealthy.append(f"{project}/{service}")
         if not args.dry_run and not args.only:
-            # Only unused images and old build cache; never touch volumes or app data.
-            run(["docker", "image", "prune", "-f"])
+            # Keep previous images available for rollback; only old build cache is removed.
             run(["docker", "builder", "prune", "-f", "--filter", "until=168h"])
         if unhealthy:
             raise RuntimeError(f"Preexisting unhealthy services require attention: {', '.join(unhealthy)}")

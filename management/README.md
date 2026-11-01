@@ -39,15 +39,51 @@ static `192.168.1.228/24` address. Avoid assigning `.229` to another LAN device.
 
 ## Weekly Docker recovery
 
-`docker-weekly-maintenance.py` recreates the explicitly listed running Compose
-services one at a time. Fedora runs Sunday at 03:00 and the Pi at 04:00
-America/Los_Angeles. It pulls official image tags, rebuilds the notifier from
-the checked-out source, checks container recovery, then prunes only unused
-images and build cache older than seven days. It preserves all bind mounts and
-volumes. The Streambert release image and OpenWA pinned fork are updated by
-their own release procedures; the weekly run recreates those images without
-changing their application revision. A service already unhealthy is skipped
-and logged, so it cannot be mistaken for a successful recovery drill.
+`docker-weekly-maintenance.py` runs Sunday at 03:00 on Fedora and 04:00 on the
+Pi, America/Los_Angeles. It checks that protected services have the expected
+number of running, healthy containers and verifies OpenWA's authenticated
+session readiness before touching anything. Only the
+Streambert API and worker, Ollama, and Portainer Agent are recreated weekly.
+The Pi timer checks Pi-hole without restarting DNS. Previous images, bind
+mounts, named volumes, and application data are retained; only build cache
+older than seven days is pruned. External image tags are pulled for services
+that are recreated. Local Streambert release images change only through its
+release procedure.
+
+OpenWA, the notifier, all Telegram delivery workers, Kafka, Portainer Server,
+Pi-hole, Qdrant, and Redis services are **not** automatically recreated.
+OpenWA's Chromium profile is bind mounted at
+`/home/nilesh/openwa-service/chrome-profile`; notifier state and credentials
+are bind mounted under `/home/nilesh/appointment-notifier/.state` and
+`.secrets`; Kafka data is a named volume. A restart normally preserves these,
+but a healthy container does not prove that WhatsApp remained linked or that
+Telegram delivery resumed. Use a controlled, service-specific update for
+these services and verify application state before declaring success.
+
+### Recovery if a session or delivery path fails after a manual update
+
+1. Stop further recreations and keep the existing profile, state directories,
+   named volumes, and previous image. Do not run `docker compose down -v`,
+   `docker volume prune`, or delete the Chromium profile.
+   Before a planned manual update, record the image IDs and mount paths; take a
+   protected backup of the OpenWA profile while its browser is stopped and an
+   online SQLite backup of the notifier state. Keep credentials out of logs and
+   ensure the backup is readable before changing an image.
+2. For OpenWA, inspect its authenticated `/health` response for `connected`
+   and `session.ready`. Check that the container still mounts the same host
+   profile directory. If the mount or image changed, restore the prior Compose
+   configuration and image. If WhatsApp revoked the link, use a fresh QR and
+   confirm `/health` reports both values as true; a file restore cannot undo a
+   server-side revocation.
+3. For Telegram, verify Kafka health and the delivery worker count, then check
+   the SQLite outbox in `.state` for pending or failed alerts. The Bot API token
+   comes from `.env` or `.secrets`; workers do not have a WhatsApp-style login
+   session. Restore a missing token from the protected secret source, restart
+   only the affected worker, and confirm a queued test reaches an authorized
+   recipient before clearing the incident.
+4. Record the failed image ID and logs. Roll back the image/configuration for
+   an update regression while preserving the same mounts. Recheck OpenWA
+   connectivity, Kafka, worker count, and actual alert delivery.
 
 Install the script at `/opt/docker-weekly-maintenance.py` on both hosts and the
 matching unit and timer files under `/etc/systemd/system/`. Test with
