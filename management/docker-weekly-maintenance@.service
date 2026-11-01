@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly Docker recovery drill (%i)
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/docker-weekly-maintenance.py --host %i
+TimeoutStartSec=3h

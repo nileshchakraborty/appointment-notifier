@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Pi Docker recovery drill
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 America/Los_Angeles
+Persistent=true
+RandomizedDelaySec=10min
+Unit=docker-weekly-maintenance@pi.service
+
+[Install]
+WantedBy=timers.target

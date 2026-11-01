@@ -4,41 +4,276 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>RPi services</title>
+  <title>HomeLab Hub</title>
   <style>
-    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
-    body { margin: 0; min-height: 100vh; background: #f8fafc; color: #172033; }
-    main { width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 56px 0; }
-    h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -.02em; }
-    .subtitle { margin: 0 0 28px; color: #64748b; }
-    .card { overflow: hidden; border: 1px solid #dbe3ee; border-radius: 16px; background: white; box-shadow: 0 8px 24px #17203312; }
+    :root { color-scheme: light dark; font: 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #0f172a; color: #f1f5f9; }
+    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }
+    header { margin-bottom: 32px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 16px; border-bottom: 1px solid #1e293b; padding-bottom: 24px; }
+    h1 { margin: 0 0 6px; font-size: 32px; font-weight: 700; letter-spacing: -.02em; color: #f8fafc; }
+    .subtitle { margin: 0; color: #94a3b8; font-size: 15px; }
+    .status-pill { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 9999px; background: rgba(56, 189, 248, 0.12); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .notice { border-left: 3px solid #f59e0b; padding: 12px 16px; background: #1e293b; color: #cbd5e1; font-size: 13px; line-height: 1.5; margin: 0 0 28px; }
+    .node-title { font-size: 18px; font-weight: 600; color: #38bdf8; margin: 32px 0 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: #0284c7; color: #ffffff; letter-spacing: .02em; }
+    .badge-ts { background: #6366f1; }
+    .badge-net { background: #059669; }
+    .card { overflow: hidden; border: 1px solid #1e293b; border-radius: 14px; background: #1e293b; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); margin-bottom: 28px; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 18px 20px; text-align: left; border-bottom: 1px solid #e8edf3; vertical-align: middle; }
-    th { color: #64748b; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; background: #f8fafc; }
+    th, td { padding: 16px 20px; text-align: left; border-bottom: 1px solid #334155; vertical-align: middle; }
+    th { color: #94a3b8; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; background: #0f172a; }
     tr:last-child td { border-bottom: 0; }
-    .service { font-weight: 650; }
-    .description { display: block; margin-top: 4px; color: #64748b; font-size: 13px; }
-    a { color: #1565c0; font-weight: 600; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .fallback { color: #475569; font-size: 13px; font-weight: 500; }
-    @media (max-width: 640px) { main { padding: 28px 0; } th, td { padding: 14px 12px; } th:nth-child(2), td:nth-child(2) { display: none; } }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .service { font-weight: 600; color: #f8fafc; font-size: 15px; }
+    .description { display: block; margin-top: 3px; color: #94a3b8; font-size: 13px; line-height: 1.4; }
+    a { color: #38bdf8; font-weight: 500; text-decoration: none; transition: color 0.15s ease; }
+    a:hover { color: #7dd3fc; text-decoration: underline; }
+    .link-lan { color: #38bdf8; font-family: ui-monospace, monospace; font-size: 13px; }
+    .link-ts { color: #a5b4fc; font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+    .link-ts:hover { color: #c7d2fe; }
+    .ts-icon { font-size: 10px; padding: 2px 5px; border-radius: 4px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.4); color: #c7d2fe; }
+    footer { margin-top: 48px; border-top: 1px solid #1e293b; padding-top: 20px; color: #64748b; font-size: 13px; text-align: center; }
+    @media (max-width: 768px) {
+      main { padding: 20px 0; }
+      th, td { padding: 12px 14px; }
+      th:nth-child(2), td:nth-child(2) { display: none; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <h1>RPi services</h1>
-    <p class="subtitle">Private LAN quick links</p>
+    <header>
+      <div>
+        <h1>HomeLab Hub</h1>
+        <p class="subtitle">Home LAN services • Local DNS requires Pi-hole at 192.168.1.229</p>
+      </div>
+      <div class="status-pill">
+        <span>Service directory</span>
+      </div>
+    </header>
+    <p class="notice">OpenWA is awaiting WhatsApp QR pairing. Tailscale links require this device to be connected to the tailnet. Weekly Docker recovery runs on Fedora Sunday at 03:00 and Pi Sunday at 04:00; check Portainer for live health.</p>
+
+    <!-- Node 1: Fedora AI Compute Node -->
+    <div class="node-title">
+      <span>Node 1: Fedora Compute & AI Node</span>
+      <div class="badges">
+        <span class="badge">Wired: 192.168.1.215 • Wi-Fi: 192.168.1.250</span>
+        <span class="badge badge-ts">Tailscale: 100.127.141.110</span>
+      </div>
+    </div>
     <section class="card">
       <table>
-        <thead><tr><th>Service</th><th>Hostname</th><th>Direct fallback</th></tr></thead>
+        <thead>
+          <tr>
+            <th style="width: 38%;">Service</th>
+            <th style="width: 32%;">Home LAN (DNS / IP)</th>
+            <th style="width: 30%;">Tailscale Mesh (Worldwide)</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr><td><span class="service">Portainer</span><span class="description">Docker management</span></td><td><a href="http://portainer.rpi.home.arpa/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:9000/">rpi.local:9000</a></td></tr>
-          <tr><td><span class="service">Pi-hole</span><span class="description">DNS management</span></td><td><a href="http://pihole.rpi.home.arpa/admin/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:3000/admin/">rpi.local:3000</a></td></tr>
-          <tr><td><span class="service">Streambert TV</span><span class="description">TV service</span></td><td><a href="http://streambert-tv.rpi.home.arpa/">Open hostname</a></td><td><a class="fallback" href="http://rpi.local:8090/">rpi.local:8090</a></td></tr>
-          <tr><td><span class="service">Streambert Fire TV</span><span class="description">Installable Android TV APK</span></td><td><a href="/firestick/streambert.apk" download>Download APK</a></td><td><a class="fallback" href="http://rpi.local:8090/firestick/streambert.apk" download>Direct download</a></td></tr>
+          <tr>
+            <td>
+              <span class="service">Portainer Server</span>
+              <span class="description">Docker container, stack & agent management</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://portainer.rpi.home.arpa/" target="_blank">portainer.rpi.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.250:9000/" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.250:9000</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:9000/" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:9000</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">llama.cpp Vulkan AI Router</span>
+              <span class="description">AMD Radeon GPU accelerated local LLMs</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://llama.fedora.home.arpa/" target="_blank">llama.fedora.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.250:8080/" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.250:8080</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:8080/" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:8080</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Cockpit Web Console</span>
+              <span class="description">Hardware metrics, VMs, storage, logs & terminal</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://cockpit.fedora.home.arpa/" target="_blank">cockpit.fedora.home.arpa</a><br>
+              <a class="link-lan" href="https://192.168.1.250:9090/" target="_blank" style="color:#64748b; font-size:12px;">https://192.168.1.250:9090</a>
+            </td>
+            <td>
+              <a class="link-ts" href="https://100.127.141.110:9090/" target="_blank"><span class="ts-icon">TS</span> https://100.127.141.110:9090</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Streambert TV API</span>
+              <span class="description">Production streaming API & queue worker backend</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://streambert-tv.rpi.home.arpa/" target="_blank">streambert-tv.rpi.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.250:8090/" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.250:8090</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:8090/" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:8090</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">OpenWA Web Service</span>
+              <span class="description">WhatsApp API gateway • QR pairing required</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://openwa.rpi.home.arpa/" target="_blank">openwa.rpi.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.250:8081/" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.250:8081</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:8081/" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:8081</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Qdrant Vector DB</span>
+              <span class="description">Vector database collections & web dashboard</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://qdrant.fedora.home.arpa/dashboard" target="_blank">qdrant.fedora.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.250:6333/dashboard" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.250:6333</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:6333/dashboard" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:6333</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Ollama Engine</span>
+              <span class="description">Local model inference REST endpoint</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://192.168.1.250:11434/" target="_blank">192.168.1.250:11434</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.127.141.110:11434/" target="_blank"><span class="ts-icon">TS</span> 100.127.141.110:11434</a>
+            </td>
+          </tr>
         </tbody>
       </table>
     </section>
+
+    <!-- Node 2: Raspberry Pi Node -->
+    <div class="node-title">
+      <span>Node 2: Raspberry Pi Network Anchor</span>
+      <div class="badges">
+        <span class="badge">LAN: 192.168.1.229</span>
+        <span class="badge badge-ts">Tailscale: 100.81.101.45</span>
+      </div>
+    </div>
+    <section class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 38%;">Service</th>
+            <th style="width: 32%;">Home LAN (DNS / IP)</th>
+            <th style="width: 30%;">Tailscale Mesh (Worldwide)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <span class="service">Pi-hole DNS & AdBlock</span>
+              <span class="description">Network-wide ad-blocking & local DNS (*.home.arpa)</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://pihole.rpi.home.arpa/admin/" target="_blank">pihole.rpi.home.arpa</a><br>
+              <a class="link-lan" href="http://192.168.1.229:3000/admin/" target="_blank" style="color:#64748b; font-size:12px;">192.168.1.229:3000</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.81.101.45:3000/admin/" target="_blank"><span class="ts-icon">TS</span> 100.81.101.45:3000</a>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Streambert Fire TV APK</span>
+              <span class="description">Android TV application package</span>
+            </td>
+            <td>
+              <a class="link-lan" href="/firestick/streambert.apk" download>Download APK</a><br>
+              <a class="link-lan" href="http://192.168.1.229/firestick/streambert.apk" download style="color:#64748b; font-size:12px;">Direct LAN Link</a>
+            </td>
+            <td>
+              <a class="link-ts" href="http://100.81.101.45/firestick/streambert.apk" download><span class="ts-icon">TS</span> Download via Tailscale</a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Node 3: Network Infrastructure -->
+    <div class="node-title">
+      <span>Node 3: Network Hardware & Infrastructure</span>
+      <div class="badges">
+        <span class="badge badge-net">Subnet: 192.168.1.0/24</span>
+      </div>
+    </div>
+    <section class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 38%;">Device</th>
+            <th style="width: 32%;">Web Admin Console</th>
+            <th style="width: 30%;">Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <span class="service">TP-Link Archer BE550 Pro</span>
+              <span class="description">Primary LAN router and gateway</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://192.168.1.1/" target="_blank">192.168.1.1</a>
+            </td>
+            <td>
+              <span style="color:#94a3b8; font-size:13px;">Default Gateway / WAN</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">Netgear RS280</span>
+              <span class="description">High-performance Room 2 Wi-Fi AP & Gigabit Switch</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://192.168.1.2/" target="_blank">192.168.1.2</a>
+            </td>
+            <td>
+              <span style="color:#94a3b8; font-size:13px;">Wi-Fi Access Point (AP Mode)</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="service">ScreenBeam ECB7250</span>
+              <span class="description">MoCA 2.5 coaxial network bridge (AES-128 encrypted)</span>
+            </td>
+            <td>
+              <a class="link-lan" href="http://192.168.1.200/" target="_blank">192.168.1.200</a>
+            </td>
+            <td>
+              <span style="color:#94a3b8; font-size:13px;">Gigabit Coaxial Backhaul</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      HomeLab Hub • Managed on Raspberry Pi 5 & Fedora Node
+    </footer>
   </main>
 </body>
 </html>
