@@ -1,12 +1,17 @@
 import json
+import io
+from concurrent.futures import ThreadPoolExecutor
+import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
-from appointment_notifier.config import WhatsAppSettings
+from appointment_notifier.config import TelegramAlertSettings, WhatsAppSettings
 from appointment_notifier.models import Alert
-from appointment_notifier.notifiers import CompositeNotifier, Notifier, OpenWaWhatsAppNotifier, _format_openwa_chat_id
+from appointment_notifier.notifiers import CompositeNotifier, Notifier, OpenWaWhatsAppNotifier, TelegramBotNotifier, _format_openwa_chat_id
+from appointment_notifier.store import AlertStore
 
 
 def _settings(**overrides) -> WhatsAppSettings:
@@ -94,3 +99,74 @@ def test_composite_isolates_failed_channel_and_delivers_healthy_channel() -> Non
         Alert("title", "body", "source", 1, datetime.now(timezone.utc))
     )
     assert calls == ["broken", "healthy"]
+
+
+def test_telegram_alert_reaches_configured_and_new_allowed_chats_once(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    store.ensure_bot_user(chat_id="100", is_owner=True)
+    store.ensure_bot_user(username="friend")
+    store.bind_bot_user_chat(chat_id="200", username="friend")
+    store.ensure_bot_user(username="not_started")
+    settings = TelegramAlertSettings(
+        enabled=True, bot_token="test-token", chat_ids=("100",),
+        allowed_usernames=(), owner_chat_ids=("100",), owner_usernames=(),
+    )
+    recipients = []
+
+    def fake_urlopen(request, timeout):
+        recipients.append(urllib.parse.parse_qs(request.data.decode())["chat_id"][0])
+        return _Response()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        TelegramBotNotifier(settings, store=store).send(
+            Alert("Status", "Current: NOT AVAILABLE", "test", 1, datetime.now(timezone.utc))
+        )
+
+    assert recipients == ["100", "200"]
+
+
+def test_telegram_alert_reads_allowed_chats_from_delivery_thread(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    store.ensure_bot_user(chat_id="200")
+    settings = TelegramAlertSettings(
+        enabled=True, bot_token="test-token", chat_ids=("100",),
+        allowed_usernames=(), owner_chat_ids=(), owner_usernames=(),
+    )
+    recipients = []
+
+    def fake_urlopen(request, timeout):
+        recipients.append(urllib.parse.parse_qs(request.data.decode())["chat_id"][0])
+        return _Response()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(
+                TelegramBotNotifier(settings, store=store).send,
+                Alert("Status", "Slot available", "test", 1, datetime.now(timezone.utc)),
+            ).result()
+
+    assert recipients == ["100", "200"]
+
+
+def test_deactivated_recipient_does_not_block_other_allowed_user(tmp_path) -> None:
+    store = AlertStore(tmp_path / "state.sqlite3")
+    store.ensure_bot_user(chat_id="100")
+    store.ensure_bot_user(chat_id="200")
+    settings = TelegramAlertSettings(
+        enabled=True, bot_token="test-token", chat_ids=("100",),
+        allowed_usernames=(), owner_chat_ids=(), owner_usernames=(),
+    )
+    attempted = []
+
+    def fake_urlopen(request, timeout):
+        chat_id = urllib.parse.parse_qs(request.data.decode())["chat_id"][0]
+        attempted.append(chat_id)
+        if chat_id == "100":
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(b'{"description":"user is deactivated"}'))
+        return _Response()
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        TelegramBotNotifier(settings, store=store).send(
+            Alert("Status", "Current: NOT AVAILABLE", "test", 1, datetime.now(timezone.utc))
+        )
+    assert attempted == ["100", "200"]

@@ -12,10 +12,11 @@ from .chat import OllamaChatService
 from .config import load_settings
 from .models import Alert
 from .llm import build_llm_client
-from .notifiers import build_notifier
+from .notifiers import TelegramBotNotifier, build_notifier
 from .parser import VisaSlotParser
 from .store import AlertStore
 from .telegram_watcher import run_async
+from .telegram_queue import run_worker
 from .trend import TrendService
 
 
@@ -24,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("run", help="Watch Telegram and send slot alerts.")
+    subparsers.add_parser("deliver-telegram", help="Consume queued Telegram alerts from Kafka.")
     subparsers.add_parser("doctor", help="Run comprehensive system and connectivity diagnostics.")
     subparsers.add_parser("test-notify", help="Send a test alert through enabled notifiers.")
     parse_text = subparsers.add_parser("parse-text", help="Check how a Telegram message would be classified.")
@@ -110,30 +112,41 @@ def main(argv: list[str] | None = None) -> None:
             store.close()
         return
 
-    notifier = build_notifier(
-        settings.telegram_alert,
-        settings.email,
-        settings.sms,
-        settings.whatsapp,
-        settings.imessage,
-        settings.dry_run,
-    )
-
-    if args.command == "test-notify":
-        notifier.send(
-            Alert(
-                title="Appointment notifier test",
-                body="This is a test alert from appointment-notifier.",
-                source="local",
-                message_id=0,
-                sent_at=datetime.now(timezone.utc),
-                silent=False,
-            )
-        )
+    if args.command == "deliver-telegram":
+        if not settings.kafka_queue.enabled or not settings.telegram_alert.enabled:
+            parser.error("TELEGRAM_QUEUE_ENABLED and TELEGRAM_ALERT_ENABLED must be true")
+        store = AlertStore(settings.sqlite_path, initialize=False)
+        try:
+            run_worker(store, TelegramBotNotifier(settings.telegram_alert, store=store), settings.kafka_queue)
+        finally:
+            store.close()
         return
 
     store = AlertStore(settings.sqlite_path)
     try:
+        notifier = build_notifier(
+            settings.telegram_alert,
+            settings.email,
+            settings.sms,
+            settings.whatsapp,
+            settings.imessage,
+            settings.dry_run,
+            store=store,
+        )
+
+        if args.command == "test-notify":
+            notifier.send(
+                Alert(
+                    title="Appointment notifier test",
+                    body="This is a test alert from appointment-notifier.",
+                    source="local",
+                    message_id=0,
+                    sent_at=datetime.now(timezone.utc),
+                    silent=False,
+                )
+            )
+            return
+
         app = AppointmentNotifierApp(
             settings=settings,
             parser=VisaSlotParser(settings.required_terms, settings.suppress_terms),

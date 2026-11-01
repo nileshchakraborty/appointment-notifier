@@ -20,26 +20,32 @@ class TelegramWatcher:
         self.media_dirs = media_dirs or (Path("/tmp/appointment-notifier-media"),)
         Path(self.session_path).parent.mkdir(parents=True, exist_ok=True)
 
-    async def run(self, history_limit: int, on_message) -> None:
+    async def run(self, history_limit: int, on_message, *, last_processed_id: int | None = None) -> None:
         try:
             from telethon import TelegramClient, events
         except ImportError as exc:
             raise RuntimeError("Install dependencies with: pip install -e .") from exc
 
-        async with TelegramClient(self.session_path, self.api_id, self.api_hash) as client:
+        async with TelegramClient(self.session_path, self.api_id, self.api_hash, sequential_updates=True) as client:
             entity = await client.get_entity(self.channel)
-
-            LOGGER.info("Checking last %s messages from %s", history_limit, self.channel)
-            recent_messages = [
-                message
-                async for message in client.iter_messages(entity, limit=history_limit)
-            ]
-            for message in reversed(recent_messages):
-                await self._deliver(message, client, on_message)
+            delivery_lock = asyncio.Lock()
 
             @client.on(events.NewMessage(chats=entity))
             async def handler(event) -> None:
-                await self._deliver(event.message, client, on_message)
+                async with delivery_lock:
+                    await self._deliver(event.message, client, on_message)
+
+            async with delivery_lock:
+                LOGGER.info("Catching up %s from %s", f"after message {last_processed_id}" if last_processed_id else f"last {history_limit} messages", self.channel)
+                if last_processed_id:
+                    async for message in client.iter_messages(entity, min_id=last_processed_id, reverse=True):
+                        await self._deliver(message, client, on_message)
+                else:
+                    recent_messages = [
+                        message async for message in client.iter_messages(entity, limit=history_limit)
+                    ]
+                    for message in reversed(recent_messages):
+                        await self._deliver(message, client, on_message)
 
             LOGGER.info("Watching %s", self.channel)
             await client.run_until_disconnected()

@@ -47,6 +47,13 @@ class TelegramAlertSettings:
 
 
 @dataclass(frozen=True)
+class KafkaQueueSettings:
+    enabled: bool = False
+    bootstrap_servers: str = "kafka:9092"
+    topic: str = "appointment-telegram-alerts"
+
+
+@dataclass(frozen=True)
 class EmailSettings:
     enabled: bool
     host: str
@@ -129,6 +136,7 @@ class TalosScoutSettings:
 class AppSettings:
     telegram: TelegramSettings
     telegram_alert: TelegramAlertSettings
+    kafka_queue: KafkaQueueSettings
     email: EmailSettings
     sms: SmsSettings
     whatsapp: WhatsAppSettings
@@ -167,6 +175,11 @@ def load_settings(require_telegram: bool = True) -> AppSettings:
             owner_usernames=_csv("TELEGRAM_BOT_OWNER_USERNAMES"),
             whisper_url=os.getenv("WHISPER_URL", "http://fedora.local:8084"),
             whisper_enabled=_bool("WHISPER_ENABLED", True),
+        ),
+        kafka_queue=KafkaQueueSettings(
+            enabled=_bool("TELEGRAM_QUEUE_ENABLED"),
+            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
+            topic=os.getenv("KAFKA_TELEGRAM_TOPIC", "appointment-telegram-alerts"),
         ),
         email=EmailSettings(
             enabled=_bool("EMAIL_ENABLED"),

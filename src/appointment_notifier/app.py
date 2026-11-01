@@ -9,11 +9,12 @@ from .config import AppSettings
 from .llm import build_llm_client
 from .models import Alert, SlotSignal, TelegramMessage
 from .media import PortalMediaAnalyzer
-from .notifiers import CompositeNotifier
+from .notifiers import CompositeNotifier, TelegramBotNotifier
 from .parser import VisaSlotParser
 from .store import AlertStore
 from .talos_scout import TalosScoutService
 from .telegram_watcher import TelegramWatcher
+from .telegram_queue import run_publisher
 from .trend import TrendService
 from .whatsapp_watcher import WhatsAppFoundersWatcher
 
@@ -38,6 +39,11 @@ class AppointmentNotifierApp:
             LOGGER.info("Reclassified %s historical observations", reclassified)
 
     async def handle_message(self, message: TelegramMessage) -> None:
+        await self._process_message(message)
+        if self.settings.kafka_queue.enabled and self.settings.telegram_alert.enabled and not self.settings.dry_run:
+            self.store.advance_source_cursor(message.source_chat_id, message.message_id)
+
+    async def _process_message(self, message: TelegramMessage) -> None:
         self.store.record_telegram_message(message)
         ocr_text = ""
         portal_state = None
@@ -69,6 +75,23 @@ class AppointmentNotifierApp:
 
         if self.store.has_alert(message):
             LOGGER.info("Message %s already alerted", message.message_id)
+            return
+
+        if self.settings.kafka_queue.enabled and self.settings.telegram_alert.enabled and not self.settings.dry_run:
+            telegram = next(
+                item for item in self.notifier.notifiers if isinstance(item, TelegramBotNotifier)
+            )
+            queued = self.store.enqueue_telegram_alert(message, alert, telegram.recipient_chat_ids())
+            self.store.record_alert(message, alert)
+            LOGGER.info("Queued Telegram alert for message %s to %s recipients", message.message_id, queued)
+            other_notifiers = [
+                item for item in self.notifier.notifiers if not isinstance(item, TelegramBotNotifier)
+            ]
+            if other_notifiers:
+                try:
+                    await asyncio.to_thread(CompositeNotifier(other_notifiers).send, alert)
+                except Exception:
+                    LOGGER.exception("Non-Telegram alert delivery failed for message %s", message.message_id)
             return
 
         LOGGER.info("Sending alert for Telegram message %s", message.message_id)
@@ -113,6 +136,7 @@ class AppointmentNotifierApp:
             chat_service=chat_service,
             talos_scout=talos_scout,
             whatsapp_watcher=whatsapp_watcher,
+            scope="visa",
         )
         async def supervise(name, runner):
             backoff = 1
@@ -128,9 +152,17 @@ class AppointmentNotifierApp:
                     backoff = min(backoff * 2, 60)
 
         tasks = [
-            supervise("Telegram watcher", lambda: watcher.run(self.settings.telegram.history_limit, self.handle_message)),
+            supervise("Telegram watcher", lambda: watcher.run(
+                self.settings.telegram.history_limit,
+                self.handle_message,
+                last_processed_id=(
+                    int(self.store.get_state(f"source_cursor:{self.settings.telegram.channel}") or "0") or None
+                ) if self.settings.kafka_queue.enabled else None,
+            )),
             supervise("Telegram bot listener", bot_listener.run),
         ]
+        if self.settings.kafka_queue.enabled and self.settings.telegram_alert.enabled and not self.settings.dry_run:
+            tasks.append(supervise("Telegram Kafka publisher", lambda: run_publisher(self.store, self.settings.kafka_queue)))
         if self.settings.talos_scout.enabled:
             tasks.append(supervise("WhatsApp Founders watcher", whatsapp_watcher.run))
 

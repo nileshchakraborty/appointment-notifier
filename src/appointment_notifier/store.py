@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
+from contextlib import closing
 from typing import Any
 from pathlib import Path
 
@@ -11,11 +13,15 @@ from .parser import VisaSlotParser
 
 
 class AlertStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, initialize: bool = True) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("pragma busy_timeout=5000")
+        if not initialize:
+            return
+        self.conn.execute("pragma journal_mode=WAL")
         self.conn.execute(
             """
             create table if not exists alerts (
@@ -42,6 +48,7 @@ class AlertStore:
         self._migrate_alert_columns()
         self._init_availability_state()
         self._init_bot_users()
+        self._init_notification_jobs()
         self._init_observations()
         self._init_chat_history()
         self._init_whatsapp_messages()
@@ -412,6 +419,18 @@ class AlertStore:
                 (key, value),
             )
 
+    def advance_source_cursor(self, source_chat_id: str, message_id: int) -> None:
+        key = f"source_cursor:{source_chat_id}"
+        with self.conn:
+            self.conn.execute(
+                """
+                insert into bot_state (key, value) values (?, ?)
+                on conflict(key) do update set value = excluded.value
+                where cast(bot_state.value as integer) < cast(excluded.value as integer)
+                """,
+                (key, str(message_id)),
+            )
+
     def set_availability(
         self,
         available: bool,
@@ -540,26 +559,163 @@ class AlertStore:
         username = _normalize_username(username or "")
         return self._bot_user_matches(chat_id=chat_id, username=username, owner_only=False)
 
+    def bind_bot_user_chat(self, *, chat_id: str, username: str) -> bool:
+        """Remember an allowed user's private chat after they message the bot."""
+        chat_id = _clean_optional(chat_id)
+        username = _normalize_username(username)
+        if not chat_id or not username:
+            return False
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                update telegram_bot_users
+                set chat_id = ?, updated_at = current_timestamp
+                where username = ? and chat_id is null
+                  and not exists (select 1 from telegram_bot_users where chat_id = ?)
+                """,
+                (chat_id, username, chat_id),
+            )
+        return cursor.rowcount == 1
+
     def bot_user_is_owner(self, *, chat_id: str | None, username: str | None) -> bool:
         chat_id = _clean_optional(chat_id)
         username = _normalize_username(username or "")
         return self._bot_user_matches(chat_id=chat_id, username=username, owner_only=True)
 
     def list_bot_users(self) -> list[dict[str, Any]]:
-        cursor = self.conn.execute(
-            """
-            select chat_id, username, display_name, is_owner, alerts_enabled, created_at, updated_at
-            from telegram_bot_users
-            order by is_owner desc, username is null, username, chat_id
-            """
-        )
+        # Notification delivery runs in asyncio.to_thread. Read through a
+        # connection owned by the calling thread instead of self.conn, which
+        # belongs to the event-loop thread.
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                select chat_id, username, display_name, is_owner, alerts_enabled, created_at, updated_at
+                from telegram_bot_users
+                order by is_owner desc, username is null, username, chat_id
+                """
+            ).fetchall()
         users = []
-        for row in cursor.fetchall():
+        for row in rows:
             data = dict(row)
             data["is_owner"] = bool(data["is_owner"])
             data["alerts_enabled"] = bool(data["alerts_enabled"])
             users.append(data)
         return users
+
+    def enqueue_telegram_alert(self, message: TelegramMessage, alert: Alert, chat_ids: set[str]) -> int:
+        """Persist one delivery job per recipient before publishing to Kafka."""
+        payload = json.dumps({
+            "title": alert.title,
+            "body": alert.body,
+            "source": alert.source,
+            "message_id": alert.message_id,
+            "sent_at": alert.sent_at.isoformat() if alert.sent_at else None,
+            "silent": alert.silent,
+        })
+        inserted = 0
+        with self.conn:
+            for chat_id in sorted(chat_ids):
+                job_id = hashlib.sha256(
+                    f"telegram\0{message.source_chat_id}\0{message.message_id}\0{chat_id}".encode()
+                ).hexdigest()
+                cursor = self.conn.execute(
+                    """
+                    insert or ignore into notification_jobs
+                      (job_id, source_chat_id, message_id, chat_id, alert_json, queued_at)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (job_id, message.source_chat_id, message.message_id, chat_id, payload, time.time()),
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def due_telegram_jobs(self, *, now: float | None = None, limit: int = 100) -> list[str]:
+        current = time.time() if now is None else now
+        rows = self.conn.execute(
+            """
+            select job_id from notification_jobs
+            where status = 'pending' and next_attempt_at <= ?
+              and (published_at is null or published_at < ?)
+            order by next_attempt_at, created_at limit ?
+            """,
+            (current, current - 15, limit),
+        ).fetchall()
+        return [str(row["job_id"]) for row in rows]
+
+    def mark_telegram_job_published(self, job_id: str, *, now: float | None = None) -> None:
+        with self.conn:
+            self.conn.execute(
+                "update notification_jobs set published_at = ? where job_id = ? and status = 'pending'",
+                (time.time() if now is None else now, job_id),
+            )
+
+    def get_telegram_job(self, job_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "select job_id, chat_id, alert_json, status, attempts, next_attempt_at, queued_at from notification_jobs where job_id = ?",
+            (job_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def mark_telegram_job_delivered(self, job_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "update notification_jobs set status = 'delivered', delivered_at = current_timestamp, last_error = null where job_id = ? and status = 'pending'",
+                (job_id,),
+            )
+
+    def mark_telegram_job_retry(self, job_id: str, error: str, *, now: float | None = None) -> None:
+        job = self.get_telegram_job(job_id)
+        if not job or job["status"] != "pending":
+            return
+        attempts = int(job["attempts"]) + 1
+        delay = min(2 ** min(attempts, 6), 60)
+        with self.conn:
+            self.conn.execute(
+                """
+                update notification_jobs
+                set attempts = ?, next_attempt_at = ?, published_at = null, last_error = ?
+                where job_id = ? and status = 'pending'
+                """,
+                (attempts, (time.time() if now is None else now) + delay, error[:500], job_id),
+            )
+
+    def mark_telegram_job_dead(self, job_id: str, error: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "update notification_jobs set status = 'dead', attempts = attempts + 1, last_error = ? where job_id = ? and status = 'pending'",
+                (error[:500], job_id),
+            )
+
+    def telegram_job_counts(self) -> dict[str, int]:
+        return {str(row["status"]): int(row["n"]) for row in self.conn.execute(
+            "select status, count(*) as n from notification_jobs group by status"
+        )}
+
+    def _init_notification_jobs(self) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                create table if not exists notification_jobs (
+                  job_id text primary key,
+                  source_chat_id text not null,
+                  message_id integer not null,
+                  chat_id text not null,
+                  alert_json text not null,
+                  queued_at real not null,
+                  status text not null default 'pending',
+                  attempts integer not null default 0,
+                  next_attempt_at real not null default 0,
+                  published_at real,
+                  last_error text,
+                  created_at text not null default current_timestamp,
+                  delivered_at text
+                )
+                """
+            )
+            self.conn.execute(
+                "create index if not exists notification_jobs_due on notification_jobs(status, next_attempt_at, published_at)"
+            )
 
     def bot_user_count(self) -> int:
         row = self.conn.execute("select count(*) as count from telegram_bot_users").fetchone()

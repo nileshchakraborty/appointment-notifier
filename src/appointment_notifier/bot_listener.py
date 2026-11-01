@@ -118,7 +118,11 @@ class TelegramBotCommandListener:
         chat_service: OllamaChatService | None = None,
         talos_scout: Any | None = None,
         whatsapp_watcher: Any | None = None,
+        scope: str = "combined",
     ) -> None:
+        if scope not in {"combined", "visa", "talos"}:
+            raise ValueError(f"Unknown bot scope: {scope}")
+        self.scope = scope
         self.settings = settings
         self.store = store
         self.allowed_chat_ids = {str(chat_id) for chat_id in settings.chat_ids}
@@ -185,8 +189,8 @@ class TelegramBotCommandListener:
         updates = await asyncio.to_thread(self._api_json, "getUpdates", params)
         for update in updates.get("result", []):
             update_id = int(update["update_id"])
-            self.store.set_state("telegram_bot_update_offset", str(update_id + 1))
             await self._handle_update(update)
+            self.store.set_state("telegram_bot_update_offset", str(update_id + 1))
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
         message = update.get("message") or {}
@@ -202,15 +206,38 @@ class TelegramBotCommandListener:
                 username or "<none>",
             )
             return
+        if chat.get("type") == "private":
+            username = (message.get("from") or {}).get("username")
+            if username:
+                self.store.bind_bot_user_chat(chat_id=chat_id, username=str(username))
         if not text:
             voice = message.get("voice") or message.get("audio")
             if voice and getattr(self.settings, "whisper_enabled", True):
-                await self._handle_voice_update(chat_id, voice)
+                if self.scope == "visa":
+                    await asyncio.to_thread(self._api_json, "sendMessage", {
+                        "chat_id": chat_id,
+                        "text": "Voice and Talos requests belong in @talosprotocolaibot. Send visa questions as text here.",
+                    })
+                else:
+                    await self._handle_voice_update(chat_id, voice)
             return
 
         parts = text.split()
         command = parts[0].split("@")[0].lower()
         subquery = text.partition(" ")[2].strip()
+
+        if self.scope != "combined":
+            scoped_response = self._scope_response(command, text)
+            if scoped_response is not None:
+                await asyncio.to_thread(self._api_json, "sendMessage", {
+                    "chat_id": chat_id,
+                    "text": scoped_response,
+                    "disable_web_page_preview": "true",
+                })
+                return
+            if self.scope == "talos" and not text.startswith("/"):
+                await self._dispatch_a2a_streaming(chat_id, text, domain="talos")
+                return
 
         if command in {"/start", "/help"}:
             sub_lower = subquery.lower()
@@ -290,6 +317,24 @@ class TelegramBotCommandListener:
                 "disable_web_page_preview": "true",
             },
         )
+
+    def _scope_response(self, command: str, text: str) -> str | None:
+        if command in {"/start", "/help"}:
+            return HELP_VISA if self.scope == "visa" else HELP_TALOS
+        if self.scope == "visa":
+            talos_commands = {
+                "/talos", "/scout", "/a2a", "/protocol", "/agentcard",
+                "/task", "/tasks", "/rpc", "/startups", "/founders",
+                "/sync", "/campaign", "/outreach",
+            }
+            if command in talos_commands or (command == "/ask" and TALOS_ROUTING_PATTERN.search(text)) or (not text.startswith("/") and TALOS_ROUTING_PATTERN.search(text)):
+                return "Talos requests have moved to @talosprotocolaibot."
+        else:
+            if command in {"/current", "/last", "/trend"}:
+                return "Visa appointment requests belong in @usvisaavaibalitynotifierinbot."
+            if command == "/ask":
+                return "Use /talos <question> or send your Talos question as text here. Visa questions belong in @usvisaavaibalitynotifierinbot."
+        return None
 
     def _edit_message_text(self, chat_id: str, message_id: int, text: str) -> bool:
         try:
@@ -718,7 +763,7 @@ class TelegramBotCommandListener:
 
             final_task = self.a2a_engine.get_task(task.id) or task
             if final_task.status.state == TaskState.COMPLETED:
-                body = output_text or "Task completed successfully."
+                body = self._completed_task_output(final_task, output_text)
                 suffix = "\n\n💡 Tip: Use /talos <question> for Talos queries and /ask for visa slots." if disambiguated else ""
                 final_text = (body + suffix).strip()
             elif final_task.status.state == TaskState.CANCELED:
@@ -732,6 +777,16 @@ class TelegramBotCommandListener:
             LOGGER.exception("Error during A2A streaming to Telegram: %s", exc)
             err_msg = f"⚠️ [Task #{short_id}] Streaming error: {exc}"
             await asyncio.to_thread(self._edit_message_text, chat_id, msg_id, err_msg)
+
+    @staticmethod
+    def _completed_task_output(task: Task, streamed_text: str | None) -> str:
+        if streamed_text:
+            return streamed_text
+        # The task may finish before the Telegram stream subscriber attaches.
+        for message in reversed(task.history):
+            if message.role == "agent" and message.get_text():
+                return message.get_text()
+        return "Task completed without an answer. Please retry."
 
     def _find_task_by_prefix(self, prefix: str) -> Task | None:
         task = self.a2a_engine.get_task(prefix)
@@ -966,6 +1021,8 @@ class TelegramBotCommandListener:
 
     def _format_current(self) -> str:
         state = self.store.availability_state()
+        if not state.get("current_seen_at"):
+            return "Current appointment status is unknown; no channel observation has been recorded in this bot's database yet."
         current = "AVAILABLE" if state["currently_available"] else "NOT AVAILABLE"
         lines = [f"Current: {current}"]
         if state.get("current_seen_at"):

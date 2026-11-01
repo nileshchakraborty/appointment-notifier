@@ -10,6 +10,7 @@ from email.message import EmailMessage
 
 from .config import EmailSettings, IMessageSettings, SmsSettings, TelegramAlertSettings, WhatsAppSettings
 from .models import Alert
+from .store import AlertStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -89,8 +90,9 @@ class EmailNotifier(Notifier):
 class TelegramBotNotifier(Notifier):
     supports_silent = True
 
-    def __init__(self, settings: TelegramAlertSettings) -> None:
+    def __init__(self, settings: TelegramAlertSettings, store: AlertStore | None = None) -> None:
         self.settings = settings
+        self.store = store
         missing = []
         if not settings.bot_token:
             missing.append("TELEGRAM_BOT_TOKEN")
@@ -100,28 +102,12 @@ class TelegramBotNotifier(Notifier):
             raise ValueError(f"Telegram alert enabled but missing: {', '.join(missing)}")
 
     def send(self, alert: Alert) -> None:
-        text = f"*{_escape_markdown(alert.title)}*\n{_escape_markdown(alert.body)}"
-        url = f"https://api.telegram.org/bot{self.settings.bot_token}/sendMessage"
-        for chat_id in self.settings.chat_ids:
-            payload = urllib.parse.urlencode(
-                {
-                    "chat_id": chat_id,
-                    "text": text[:4096],
-                    "parse_mode": "MarkdownV2",
-                    "disable_web_page_preview": "true",
-                    "disable_notification": "true" if alert.silent else "false",
-                }
-            ).encode("utf-8")
-            request = urllib.request.Request(
-                url,
-                data=payload,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; AppointmentNotifier/1.0)"},
-                method="POST",
-            )
+        recipients = self.recipient_chat_ids()
+        delivered = False
+        for chat_id in sorted(recipients):
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    if response.status >= 400:
-                        raise RuntimeError(f"Telegram Bot API returned HTTP {response.status}")
+                self.send_to(chat_id, alert)
+                delivered = True
             except urllib.error.HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="ignore")
                 LOGGER.warning(
@@ -130,10 +116,43 @@ class TelegramBotNotifier(Notifier):
                     exc.code,
                     err_body,
                 )
-                raise
             except urllib.error.URLError:
                 LOGGER.exception("Telegram Bot send failed for chat_id=%s", chat_id)
-                raise
+            except Exception:
+                LOGGER.exception("Telegram Bot send failed for chat_id=%s", chat_id)
+        if not delivered:
+            raise RuntimeError("Telegram Bot alert failed for all recipients")
+
+    def recipient_chat_ids(self) -> set[str]:
+        recipients = set(self.settings.chat_ids)
+        if self.store is not None:
+            recipients.update(
+                str(user["chat_id"])
+                for user in self.store.list_bot_users()
+                if user["chat_id"] and user["alerts_enabled"]
+            )
+        return recipients
+
+    def send_to(self, chat_id: str, alert: Alert) -> None:
+        text = f"*{_escape_markdown(alert.title)}*\n{_escape_markdown(alert.body)}"
+        payload = urllib.parse.urlencode(
+            {
+                "chat_id": chat_id,
+                "text": text[:4096],
+                "parse_mode": "MarkdownV2",
+                "disable_web_page_preview": "true",
+                "disable_notification": "true" if alert.silent else "false",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{self.settings.bot_token}/sendMessage",
+            data=payload,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AppointmentNotifier/1.0)"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"Telegram Bot API returned HTTP {response.status}")
 
 
 class TwilioSmsNotifier(Notifier):
@@ -267,10 +286,11 @@ def build_notifier(
     whatsapp: WhatsAppSettings,
     imessage: IMessageSettings,
     dry_run: bool,
+    store: AlertStore | None = None,
 ) -> CompositeNotifier:
     notifiers: list[Notifier] = []
     if telegram_alert.enabled:
-        notifiers.append(TelegramBotNotifier(telegram_alert))
+        notifiers.append(TelegramBotNotifier(telegram_alert, store=store))
     if email.enabled:
         notifiers.append(EmailNotifier(email))
     if sms.enabled:

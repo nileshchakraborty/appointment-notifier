@@ -45,6 +45,11 @@ RESPONSE GUIDELINES:
 - Recommend specific startups from the indexed database and concrete ICP segments to sell to.
 """
 
+PRIORITY_QUESTION = re.compile(
+    r"\b(?:pitch|contact|approach|reach out).{0,40}\bfirst\b|\bprioriti[sz]e\b",
+    re.IGNORECASE,
+)
+
 EXTRACTION_PROMPT = """You are an AI investment scout and tech analyst.
 Analyze the following WhatsApp chat messages from "AI Founders Lounge".
 Identify any founders introducing themselves, launching a product, or describing their startup or tool.
@@ -224,9 +229,12 @@ class TalosScoutService:
         # 1. Semantic search in Qdrant Vector Store
         vector_matches = await asyncio.to_thread(
             self.search_vector_startups,
-            question,
+            self._vector_query(question),
             self.settings.vector_search_limit,
         )
+        priority = self._priority_recommendation(question, vector_matches)
+        if priority:
+            return priority
 
         # 2. Broad SQLite records
         top_startups = self.store.get_top_startups(limit=10)
@@ -309,7 +317,7 @@ class TalosScoutService:
         await emit_status("🔍 Searching Qdrant vector store (Cosine similarity)...")
         vector_matches = await asyncio.to_thread(
             self.search_vector_startups,
-            question,
+            self._vector_query(question),
             self.settings.vector_search_limit,
         )
 
@@ -332,6 +340,11 @@ class TalosScoutService:
                     data=vector_matches,
                 )
             )
+
+        priority = self._priority_recommendation(question, vector_matches)
+        if priority:
+            await emit_status("📋 Ranking reachable startup prospects from indexed records...")
+            return priority, artifacts
 
         rag_sections: list[str] = []
         if vector_matches:
@@ -385,6 +398,44 @@ class TalosScoutService:
         cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
         return cleaned or raw, artifacts
+
+    @staticmethod
+    def _vector_query(question: str) -> str:
+        if PRIORITY_QUESTION.search(question):
+            return (
+                "Talos Protocol enterprise AI agent governance capability authorization "
+                "identity audit secure messaging " + question
+            )
+        return question
+
+    @staticmethod
+    def _priority_recommendation(question: str, matches: list[dict[str, Any]]) -> str | None:
+        if not PRIORITY_QUESTION.search(question):
+            return None
+        candidates = [
+            item for item in matches
+            if str(item.get("startup_name") or "").strip().lower() not in {"", "talos", "talos protocol"}
+            and str(item.get("founder_name") or "").strip().lower() != "nilesh"
+            and str(item.get("founder_handle") or "").strip().lower() not in {"@nilesh", "@ni301192"}
+        ]
+        if not candidates:
+            return None
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                int(item.get("talos_synergy_score") or 0),
+                bool(item.get("founder_handle") or item.get("links")),
+                float(item.get("similarity_score") or 0),
+            ),
+            reverse=True,
+        )
+        first = ranked[0]
+        name = str(first.get("startup_name") or "Unknown startup")
+        reason = str(first.get("synergy_rationale") or first.get("pitch") or "Its indexed profile matches Talos capabilities.").strip()
+        contact = str(first.get("founder_handle") or first.get("links") or "No contact in the index").strip()
+        lines = [f"Pitch {name} first.", f"Why: {reason}", f"Contact in index: {contact}."]
+        lines.append("This ranking uses indexed startup records; verify the contact and current fit before outreach.")
+        return "\n".join(lines)
 
     async def extract_startups_from_batch(self, messages: list[dict[str, Any]]) -> int:
         if not messages or not self.llm_client.enabled:

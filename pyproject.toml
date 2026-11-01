@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Telegram visa appointment slot watcher with email, SMS, WhatsApp, and iMessage notifications."
 requires-python = ">=3.11"
 dependencies = [
+  "confluent-kafka>=2.16,<3",
+  "cryptography>=43,<51",
   "telethon>=1.35,<2",
+  "temporalio>=1,<2",
   "Pillow>=10,<13",
   "pytesseract>=0.3.10,<0.4",
 ]

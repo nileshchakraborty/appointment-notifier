@@ -196,6 +196,27 @@ def test_bot_listener_talos_and_disambiguation(tmp_path):
     assert "Tip: Use /talos <question>" in sent["params"]["text"]
 
 
+def test_priority_answer_selects_contactable_prospect_over_self_entry():
+    matches = [
+        {"startup_name": "Talos Protocol", "talos_synergy_score": 5, "similarity_score": 0.99},
+        {"startup_name": "AI Assistants", "founder_name": "Nilesh", "founder_handle": "@Nilesh",
+         "talos_synergy_score": 5, "similarity_score": 0.9},
+        {"startup_name": "AgentGrid", "talos_synergy_score": 5, "similarity_score": 0.82,
+         "pitch": "Multi-agent runtime"},
+        {"startup_name": "Rajdharma Technologies", "talos_synergy_score": 5,
+         "similarity_score": 0.80, "founder_handle": "@Chetan",
+         "synergy_rationale": "AI governance and capability controls fit Talos."},
+    ]
+
+    answer = TalosScoutService._priority_recommendation("Who should we pitch first?", matches)
+
+    assert answer.startswith("Pitch Rajdharma Technologies first.")
+    assert "@Chetan" in answer
+    assert "verify the contact" in answer
+    assert TalosScoutService._priority_recommendation("Write an introduction email", matches) is None
+    assert "governance capability" in TalosScoutService._vector_query("Who should we pitch first?")
+
+
 def test_fedora_llm_provider_fallback():
     import io
     from unittest.mock import patch

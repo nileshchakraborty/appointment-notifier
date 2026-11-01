@@ -15,7 +15,7 @@ flowchart TD
         VoiceInput["Telegram Voice Notes\n(.ogg / Opus Audio)"]
     end
 
-    subgraph EdgeNode["Raspberry Pi 5 (Edge Node 192.168.1.229)"]
+    subgraph FedoraServices["Fedora services (192.168.1.250)"]
         Bot["Telegram Bot & Command Listener"]
         Store["SQLite Persistent Store\n(State, Checkpoints, A2A Tasks)"]
         A2A["A2A Protocol Engine\n(In-Memory + Temporal Runners)"]
@@ -24,6 +24,11 @@ flowchart TD
         Bot --> Store
         Bot --> A2A
         A2A --> Scout
+    end
+
+    subgraph PiGateway["Raspberry Pi gateway (192.168.1.229)"]
+        PiHole["Pi-hole"]
+        Nginx["Nginx reverse proxy"]
     end
 
     subgraph InferenceCluster["Fedora AI Cluster (192.168.1.250)"]
@@ -39,7 +44,7 @@ flowchart TD
     subgraph Fallbacks["Hosted Fallback Chain"]
         NIM["NVIDIA NIM\n(OpenAI-compatible)"]
         OCloud["Ollama Cloud"]
-        LocalOllama["Pi-Local Ollama\n(gemma3:1b)"]
+        LocalOllama["Fedora Ollama\n(gemma3:1b)"]
         
         FedoraLLM -.->|"HTTP 429/Offline"| NIM
         NIM -.-> OCloud
@@ -68,7 +73,7 @@ flowchart TD
 4. **Resilient Multi-Tier LLM Offload**:
    - Primary: High-speed local GPU inference via `DeepSeek-R1-Distill-Qwen-7B` on Fedora (`192.168.1.250:8080`).
    - Automatic reasoning-trace (`<think>`) extraction for clean user answers.
-   - Graceful fallback chain: NVIDIA NIM → Ollama Cloud → Pi-local Ollama (`gemma3:1b`).
+   - Graceful fallback chain: NVIDIA NIM → Ollama Cloud → Fedora Ollama (`gemma3:1b`).
 5. **Multi-Channel Alerting**:
    - Telegram Bot, WhatsApp (OpenWA v5 alpha self-hosted or Twilio), SMS (Twilio), SMTP email, and macOS iMessage.
 
@@ -113,26 +118,20 @@ appointment-notifier backfill --chat @Regular_H1B_H4_VisaSlotsChecking --limit 5
 
 ## Telegram Bot Commands
 
-| Command | Role | Description |
-|---|---|---|
-| `/ask <question>` | All Users | Ask a visa appointment question; replies with direct conversational response. |
-| `/talos <question>` | All Users | Query Talos Scout for startup analysis, partnership matches, and founder outreach. |
-| `/current` | All Users | Check current boolean slot availability state. |
-| `/last` | All Users | Display last observed slot observation and timestamp. |
-| `/trend` | All Users | View full statistical trend report and release cadence forecast. |
-| `/task list` | All Users | List recent A2A autonomous tasks and current states. |
-| `/task get <id>` | All Users | Inspect detailed status and messages for an A2A task. |
-| `/task cancel <id>` | All Users | Cancel an in-progress A2A task. |
-| `/campaign <name>` | Owner | Dispatch a distributed Temporal swarm campaign across agent workers. |
-| `/status` | All Users | Check health of local services, Fedora LLM, Qdrant, and A2A engine. |
-| `/whoami` | All Users | View your numeric chat ID, username, and role. |
-| `/forget` | All Users | Clear conversational history for the current chat session. |
-| `/users` | Owner | List authorized command users and owners. |
-| `/allow <id\|@user> [owner]` | Owner | Authorize a new user or owner. |
-| `/revoke <id\|@user>` | Owner | Revoke an authorized user. |
-| `/help [visa\|talos]` | All Users | Show help documentation for visa or Talos commands. |
+The visa bot is `@usvisaavaibalitynotifierinbot`; `@talosprotocolaibot` handles Talos and A2A requests. Their tokens, polling processes, and SQLite state are separate. The configured visa username is spelled exactly as shown here; similarly spelled Telegram handles are different accounts.
 
-*Voice Notes:* Sending an audio voice note to the bot automatically transcribes the audio, runs A2A streaming task processing, and edits the message in place with the final answer.
+| Bot | Commands | Purpose |
+|---|---|---|
+| Visa | `/ask`, `/current`, `/last`, `/trend`, `/status` | Appointment questions and observed slot history. |
+| Talos | `/talos`, `/scout`, `/startups`, `/task`, `/campaign`, `/a2a` | Startup analysis and A2A tasks. |
+| Both | `/help`, `/whoami`, `/forget`, `/users`, `/allow`, `/revoke` | Help and access management. |
+
+Voice notes route through the Talos bot. The visa bot directs Talos and voice requests to `@talosprotocolaibot`.
+
+After the October 22 Pi outage, the visa notifier container and the separate
+Talos bot run on Fedora. The Pi runs Pi-hole and Nginx for the app routes. See
+[the migration runbook](management/telegram-failover.md) for service placement,
+verification, and the remaining WhatsApp session issue.
 
 ---
 
@@ -197,8 +196,8 @@ The LLM client dynamically resolves inference endpoints in priority order:
    - Hosted high-throughput fallback.
 3. **Ollama Cloud (`ollama_cloud`):**
    - Configured via `.secrets/ollama_api_key`.
-4. **Pi Local Ollama (`ollama`):**
-   - Local `gemma3:1b` model running as a native systemd service on the Pi (`http://192.168.1.229:11434`).
+4. **Fedora Ollama (`ollama`):**
+   - Local `gemma3:1b` model running in Docker on Fedora (`http://192.168.1.250:11434`). The Pi's old `:11434` address proxies to Fedora.
 
 ---
 
@@ -210,13 +209,18 @@ Email uses SMTP. Gmail generally requires an app password, not your normal accou
 
 SMS uses Twilio when `SMS_ENABLED=true` and Twilio credentials are present.
 
-WhatsApp uses self-hosted OpenWA or Twilio. Set `WHATSAPP_PROVIDER=openwa` (the Raspberry Pi default) or `WHATSAPP_PROVIDER=twilio`.
+WhatsApp uses self-hosted OpenWA or Twilio. Set `WHATSAPP_PROVIDER=openwa` or
+`WHATSAPP_PROVIDER=twilio` explicitly for the desired provider.
 
 iMessage uses macOS AppleScript through the local Messages app. macOS may prompt for Automation permissions.
 
 ## WhatsApp Alert Setup with OpenWA
 
-The Raspberry Pi runs the pinned OpenWA fork in Docker with native ARM64 Chromium. OpenWA v4.76.0 no longer completes authentication against the current WhatsApp Web page, so this deployment intentionally uses the newer v5 alpha. OpenWA is unofficial WhatsApp Web automation; using it may violate WhatsApp's terms and can put the linked account at risk. Prefer a dedicated account.
+OpenWA is built from the pinned `nileshchakraborty/wa-automate-nodejs` fork
+commit `975a32d4eed560f784a079e2466a0ece9cfad008` and runs in Docker on Fedora.
+The deployment files are in `management/openwa-fedora`; Fedora's runtime
+directory is `/home/nilesh/openwa-service`. OpenWA is unofficial WhatsApp Web
+automation; use a dedicated account.
 
 Generate an API key and add these values to `.env`:
 
@@ -224,40 +228,83 @@ Generate an API key and add these values to `.env`:
 WHATSAPP_ENABLED=true
 WHATSAPP_PROVIDER=openwa
 WHATSAPP_TO=whatsapp:+15551234567
-OPENWA_URL=http://openwa:8081
+OPENWA_URL=http://192.168.1.250:8081
 OPENWA_API_KEY=replace-with-a-long-random-value
 ```
 
-The Compose build context expects the pinned fork at `openwa-fork`. Build and start both services:
+Copy `management/openwa-fedora/` to `/home/nilesh/openwa-service` on Fedora,
+create `/home/nilesh/openwa-service/.env` with a protected `WA_API_KEY` entry,
+then build and start OpenWA:
 
 ```bash
-git -C openwa-fork fetch origin master
-git -C openwa-fork switch --detach fa63b0fca5367306bdf3fefe7efd9a6e299fc424
-docker compose up -d --build
+cd /home/nilesh/openwa-service
+umask 077
+printf 'WA_API_KEY=%s\n' "$(openssl rand -hex 32)" > .env
+docker compose -f compose.yml up -d --build
 ```
 
-Open `http://192.168.1.229:8081/dashboard/` (or use `rpi.local` if mDNS works on your network), enter the OpenWA API key, and scan the QR code from WhatsApp's Linked Devices screen. Port 8081 is published only on the Pi's LAN address. The session is persisted under `openwa/sessions`.
+Open `http://192.168.1.229:8081/dashboard/` through the Pi Nginx proxy and scan
+the QR code from WhatsApp's Linked Devices screen if the session is unconnected.
+The encrypted session file is persisted in
+`/home/nilesh/openwa-service/chrome-profile/default.data.json`. Check `/health`
+for `connected: true` and `session.ready: true`; HTTP 200 alone is insufficient.
 
-After OpenWA reports that it is connected, send a test from the Pi:
+After OpenWA reports that it is connected, send a test from Fedora:
 
 ```bash
-docker compose exec appointment-notifier appointment-notifier test-notify
+cd /home/nilesh/appointment-notifier
+docker compose -f docker-compose.fedora.yml exec appointment-notifier appointment-notifier test-notify
 ```
 
 To use Twilio instead, set `WHATSAPP_PROVIDER=twilio` and configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `WHATSAPP_FROM`, and `WHATSAPP_TO` as before.
 
-## Raspberry Pi Service
+## Fedora notifier service
 
-This app can run continuously on a Raspberry Pi with Docker Compose:
+The visa notifier runs on Fedora with Docker Compose:
 
 ```bash
-docker compose up -d --build
-docker compose logs -f appointment-notifier
-docker compose restart appointment-notifier
-docker compose down
+cd /home/nilesh/appointment-notifier
+docker compose -f docker-compose.fedora.yml up -d --build
+docker compose -f docker-compose.fedora.yml logs -f appointment-notifier
 ```
 
-The container reads `.env` from the project directory and mounts `.state` so the Telegram session and SQLite state survive container rebuilds.
+The container reads `.env` from the Fedora project directory and mounts `.state`
+so the copied Telegram session and SQLite state survive container rebuilds.
+
+### Queued Telegram alerts
+
+The Fedora Compose stack runs a persistent, internal Kafka broker and three
+Telegram delivery workers. A matching source post writes one SQLite outbox job
+per configured or allowed recipient before it is marked as handled. The watcher
+publishes job IDs to Kafka; workers send through the visa bot and mark each job
+delivered separately. Transient failures retry with a 2–60 second delay.
+Telegram HTTP 400/403 responses are kept as terminal failures in the outbox.
+The broker is not exposed on a host port and stores job IDs only; the alert text
+remains in the existing protected SQLite state directory.
+
+The first startup replays the latest 100 source posts. After that, the watcher
+stores its processed source ID and catches up all later posts after a restart.
+Alerts sent more than five minutes after
+their source timestamp are labeled as delayed because availability may have
+changed. Kafka and the SQLite outbox are persistent, but this is a single-host
+deployment. Telegram API outages and host failures can delay delivery, and an
+unacknowledged API response can cause a duplicate. Measure live latency from
+the `Telegram job ... delivered in ...ms from enqueue` log line; no fixed latency
+is guaranteed during outages.
+
+Useful checks on Fedora:
+
+```bash
+docker compose -f docker-compose.fedora.yml ps
+docker compose -f docker-compose.fedora.yml logs --since 10m appointment-notifier telegram-delivery kafka
+docker compose -f docker-compose.fedora.yml exec appointment-notifier python -c 'from appointment_notifier.store import AlertStore; from appointment_notifier.config import load_settings; s=AlertStore(load_settings(False).sqlite_path, initialize=False); print(s.telegram_job_counts()); s.close()'
+```
+
+Rollback: change the watcher's `TELEGRAM_QUEUE_ENABLED` value to `"false"` in
+`docker-compose.fedora.yml`, restore its prior startup replay setting, and
+recreate only the watcher. Keep the Kafka volume and
+SQLite outbox until all pending jobs have been reviewed; removing them discards
+undelivered alerts. A direct-send rollback does not process already queued jobs.
 
 If using the older host-level systemd service:
 
@@ -320,6 +367,12 @@ The same bot stores allowed command users in SQLite. On startup it seeds that ta
 
 `/current` returns the current boolean availability state. `/last` returns the last known availability timestamp/source. Authorized users can send normal text or use `/ask` to chat with the local model. `/forget` deletes that Telegram chat's bounded conversation history. `/users`, `/allow`, and `/revoke` are owner-only. `/revoke` will not remove owner rows.
 
+Users added by `/allow @username` must first send `/start` to the bot in a
+private chat. Telegram does not provide a private chat ID from a username
+alone. Once they message the bot, their chat ID is saved and matching visa
+alerts are sent to them under the existing source-message rules. Explicit
+`TELEGRAM_ALERT_CHAT_ID` recipients also continue to receive alerts.
+
 ## Historical Trend Forecast
 
 Every observed Telegram message is retained in SQLite with its parser result.
@@ -354,7 +407,7 @@ The supported providers are:
 
 - `nvidia`: NVIDIA-hosted NIM using its OpenAI-compatible chat endpoint.
 - `ollama_cloud`: direct authenticated access to Ollama Cloud.
-- `ollama`: a local or remote Ollama server, including the Pi or a laptop.
+- `ollama`: a local or remote Ollama server; the current service runs on Fedora.
 
 Cloud API keys are read only from files mounted under `/run/secrets`; never put
 them in `.env`. Create the host directory before starting Compose:
@@ -366,7 +419,7 @@ install -d -m 700 .secrets
 The default secret filenames are `.secrets/nvidia_api_key` and
 `.secrets/ollama_api_key`. Enable a provider only after its secret is present.
 To enter or rotate either key without echoing it or placing it in shell history,
-run `management/configure-llm-secrets.sh` on the Pi. Leaving a prompt blank
+run `management/configure-llm-secrets.sh` on Fedora. Leaving a prompt blank
 preserves the existing value.
 For the NVIDIA-first chain:
 
@@ -382,25 +435,18 @@ OLLAMA_ENABLED=true
 The NVIDIA timeout is intentionally shorter than the other provider timeouts
 so a stalled hosted deployment quickly yields to the configured fallbacks.
 
-The lightweight `gemma3:1b` local Ollama model remains available as the final
-fallback. `OLLAMA_URL` can point to any remote Ollama server, so moving local
-inference off the Pi does not require a code change.
-
-On the Raspberry Pi, run Ollama as a native systemd service so model memory is
-not duplicated inside Docker. Install
-`management/ollama.service.override.conf` as
-`/etc/systemd/system/ollama.service.d/appointment-notifier.conf`, then run:
+The lightweight `gemma3:1b` Ollama model runs on Fedora as the final fallback.
+The model directory was copied from the Pi and verified by file hashes. Start it
+on Fedora with:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now ollama
-ollama pull gemma3:1b
+cd /home/nilesh/ollama-deploy
+docker compose up -d
 ```
 
-The override binds Ollama only to the Pi's LAN address, limits it to one loaded
-model and one parallel request, and disables cloud model fallback. The Docker
-container should use `OLLAMA_URL=http://192.168.1.229:11434`. Keep port 11434
-limited to the trusted LAN.
+The Compose file is `management/docker-compose.fedora-ollama.yml`. The notifier
+uses `OLLAMA_URL=http://192.168.1.250:11434`. The Pi native `ollama.service` is
+disabled; Nginx preserves the old LAN address at `192.168.1.229:11434`.
 
 ## Future US Visa Scheduling Integration
 
