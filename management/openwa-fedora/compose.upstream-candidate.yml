@@ -1,3 +1,6 @@
 services:
   openwa:
-    image: local/openwa-fedora:upstream-57d4fc3
+    build:
+      args:
+        OPENWA_COMMIT: 1cb0b49bde8c799b85e1a185d68620bc15f22f52
+    image: local/openwa-fedora:upstream-1cb0b49
