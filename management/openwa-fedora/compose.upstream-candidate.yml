@@ -1,3 +1,3 @@
 services:
   openwa:
-    image: local/openwa-fedora:upstream-9931eba
+    image: local/openwa-fedora:upstream-4a3f3fb
