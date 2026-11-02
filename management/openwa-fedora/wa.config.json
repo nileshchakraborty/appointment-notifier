@@ -1,0 +1,19 @@
+{
+  "sessionId": "default",
+  "port": 8081,
+  "host": "0.0.0.0",
+  "executablePath": "/usr/bin/chromium",
+  "sessionDataPath": "/app/chrome-profile",
+  "headless": true,
+  "qrTimeout": 0,
+  "authTimeout": 0,
+  "qrLogSkip": true,
+  "ezqr": true,
+  "chromiumArgs": [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu"
+  ]
+}

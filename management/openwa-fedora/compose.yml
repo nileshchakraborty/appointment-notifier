@@ -1,0 +1,38 @@
+name: openwa-fedora
+
+services:
+  openwa:
+    build:
+      context: .
+      args:
+        OPENWA_REPOSITORY: https://github.com/nileshchakraborty/wa-automate-nodejs.git
+        OPENWA_COMMIT: 975a32d4eed560f784a079e2466a0ece9cfad008
+    image: local/openwa-fedora:975a32d4
+    container_name: openwa
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "192.168.1.250:8081:8081"
+    volumes:
+      - ./chrome-profile:/app/chrome-profile:Z
+      - ./wa.config.json:/app/wa.config.json:ro,Z
+    shm_size: 1gb
+    mem_limit: 2g
+    cpus: "2.00"
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get({host:'127.0.0.1',port:8081,path:'/health',headers:{'X-API-Key':process.env.WA_API_KEY}}, r => { let b=''; r.on('data', c => b += c); r.on('end', () => { try { const d=JSON.parse(b); process.exit(r.statusCode===200 && d.connected===true && d.session?.ready===true ? 0 : 1) } catch { process.exit(1) } }) }).on('error', () => process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    stop_grace_period: 300s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

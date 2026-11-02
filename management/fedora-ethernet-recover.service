@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover Fedora USB Ethernet adapter if absent
+Wants=powertop.service
+After=systemd-udev-trigger.service powertop.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fedora-ethernet-recover

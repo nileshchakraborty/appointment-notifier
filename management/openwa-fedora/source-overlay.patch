@@ -1,0 +1,461 @@
+diff --git a/apps/dashboard-neo/src/components/app-sidebar.tsx b/apps/dashboard-neo/src/components/app-sidebar.tsx
+index 3021e101b..1a330e31d 100644
+--- a/apps/dashboard-neo/src/components/app-sidebar.tsx
++++ b/apps/dashboard-neo/src/components/app-sidebar.tsx
+@@ -46,6 +46,7 @@ import {
+   Puzzle,
+   Plug,
+   Bot,
++  QrCode,
+ } from "lucide-react"
+ 
+ const navItems = [
+@@ -53,6 +54,7 @@ const navItems = [
+     group: "Overview",
+     items: [
+       { title: "Session", href: "/", icon: <Zap size={18} /> },
++      { title: "Pairing", href: "/pairing", icon: <QrCode size={18} /> },
+       { title: "Health", href: "/health", icon: <HeartPulse size={18} /> },
+       { title: "Events", href: "/events", icon: <Activity size={18} /> },
+     ],
+@@ -136,6 +138,7 @@ export function AppSidebar() {
+       group: "Overview",
+       items: [
+         { title: "Session", href: "/", icon: <Zap size={18} /> },
++        { title: "Pairing", href: "/pairing", icon: <QrCode size={18} /> },
+         { title: "Health", href: "/health", icon: <HeartPulse size={18} /> },
+         { title: "Events", href: "/events", icon: <Activity size={18} /> },
+       ],
+diff --git a/apps/dashboard-neo/src/routeTree.gen.ts b/apps/dashboard-neo/src/routeTree.gen.ts
+index 666bf4e81..902faaf0b 100644
+--- a/apps/dashboard-neo/src/routeTree.gen.ts
++++ b/apps/dashboard-neo/src/routeTree.gen.ts
+@@ -11,6 +11,7 @@
+ import { Route as rootRouteImport } from './routes/__root'
+ import { Route as PortalRouteImport } from './routes/portal'
+ import { Route as PlaygroundRouteImport } from './routes/playground'
++import { Route as PairingRouteImport } from './routes/pairing'
+ import { Route as McpRouteImport } from './routes/mcp'
+ import { Route as IntegrationsRouteImport } from './routes/integrations'
+ import { Route as HealthRouteImport } from './routes/health'
+@@ -33,6 +34,11 @@ const PlaygroundRoute = PlaygroundRouteImport.update({
+   path: '/playground',
+   getParentRoute: () => rootRouteImport,
+ } as any)
++const PairingRoute = PairingRouteImport.update({
++  id: '/pairing',
++  path: '/pairing',
++  getParentRoute: () => rootRouteImport,
++} as any)
+ const McpRoute = McpRouteImport.update({
+   id: '/mcp',
+   path: '/mcp',
+@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
+   '/health': typeof HealthRoute
+   '/integrations': typeof IntegrationsRoute
+   '/mcp': typeof McpRoute
++  '/pairing': typeof PairingRoute
+   '/playground': typeof PlaygroundRoute
+   '/portal': typeof PortalRoute
+   '/plugins/$name': typeof PluginsNameRoute
+@@ -115,6 +122,7 @@ export interface FileRoutesByTo {
+   '/health': typeof HealthRoute
+   '/integrations': typeof IntegrationsRoute
+   '/mcp': typeof McpRoute
++  '/pairing': typeof PairingRoute
+   '/playground': typeof PlaygroundRoute
+   '/portal': typeof PortalRoute
+   '/plugins/$name': typeof PluginsNameRoute
+@@ -131,6 +139,7 @@ export interface FileRoutesById {
+   '/health': typeof HealthRoute
+   '/integrations': typeof IntegrationsRoute
+   '/mcp': typeof McpRoute
++  '/pairing': typeof PairingRoute
+   '/playground': typeof PlaygroundRoute
+   '/portal': typeof PortalRoute
+   '/plugins/$name': typeof PluginsNameRoute
+@@ -148,6 +157,7 @@ export interface FileRouteTypes {
+     | '/health'
+     | '/integrations'
+     | '/mcp'
++    | '/pairing'
+     | '/playground'
+     | '/portal'
+     | '/plugins/$name'
+@@ -163,6 +173,7 @@ export interface FileRouteTypes {
+     | '/health'
+     | '/integrations'
+     | '/mcp'
++    | '/pairing'
+     | '/playground'
+     | '/portal'
+     | '/plugins/$name'
+@@ -178,6 +189,7 @@ export interface FileRouteTypes {
+     | '/health'
+     | '/integrations'
+     | '/mcp'
++    | '/pairing'
+     | '/playground'
+     | '/portal'
+     | '/plugins/$name'
+@@ -194,6 +206,7 @@ export interface RootRouteChildren {
+   HealthRoute: typeof HealthRoute
+   IntegrationsRoute: typeof IntegrationsRoute
+   McpRoute: typeof McpRoute
++  PairingRoute: typeof PairingRoute
+   PlaygroundRoute: typeof PlaygroundRoute
+   PortalRoute: typeof PortalRoute
+   PluginsNameRoute: typeof PluginsNameRoute
+@@ -215,6 +228,13 @@ declare module '@tanstack/react-router' {
+       preLoaderRoute: typeof PlaygroundRouteImport
+       parentRoute: typeof rootRouteImport
+     }
++    '/pairing': {
++      id: '/pairing'
++      path: '/pairing'
++      fullPath: '/pairing'
++      preLoaderRoute: typeof PairingRouteImport
++      parentRoute: typeof rootRouteImport
++    }
+     '/mcp': {
+       id: '/mcp'
+       path: '/mcp'
+@@ -306,6 +326,7 @@ const rootRouteChildren: RootRouteChildren = {
+   HealthRoute: HealthRoute,
+   IntegrationsRoute: IntegrationsRoute,
+   McpRoute: McpRoute,
++  PairingRoute: PairingRoute,
+   PlaygroundRoute: PlaygroundRoute,
+   PortalRoute: PortalRoute,
+   PluginsNameRoute: PluginsNameRoute,
+diff --git a/packages/api/src/createApiServer.ts b/packages/api/src/createApiServer.ts
+index 16a5e6289..dfedfce6c 100644
+--- a/packages/api/src/createApiServer.ts
++++ b/packages/api/src/createApiServer.ts
+@@ -65,6 +65,8 @@ export class ApiServer {
+   private client: ClientMethodMap | undefined;
+   private elasticEmitter?: ElasticEmitter;
+   private latestQR: string | null = null;
++  private qrProvider?: () => Promise<string | null>;
++  private logoutHandler?: () => Promise<void>;
+   private screencastManager: ScreencastManager;
+   private injectWebSocket: ((server: unknown) => void) | null = null;
+   private isDashboardActive: boolean = false;
+@@ -186,6 +188,15 @@ export class ApiServer {
+     this.latestQR = qr;
+   }
+ 
++  /** Prefer the browser's current QR over the event cache, which may lag a refresh. */
++  public setQrProvider(provider: (() => Promise<string | null>) | undefined) {
++    this.qrProvider = provider;
++  }
++
++  public setLogoutHandler(handler: (() => Promise<void>) | undefined) {
++    this.logoutHandler = handler;
++  }
++
+   public getApp() {
+     return this.app;
+   }
+@@ -407,12 +418,19 @@ export class ApiServer {
+       });
+     });
+ 
+-    this.app.get('/qr', (c) => {
++    this.app.get('/qr', async (c) => {
+       if (!this.config.ezqr) {
+         return c.json({ error: 'QR endpoint disabled' }, 404);
+       }
+ 
+-      if (!this.latestQR) {
++      if (this.readinessProvider?.()?.ready) {
++        return c.json({ error: 'Session is already connected' }, 404);
++      }
++
++      // A provider owns the live pairing surface. Never fall back to an old
++      // event value while that provider is unavailable or has cleared the QR.
++      const qr = this.qrProvider ? await this.qrProvider().catch(() => null) : this.latestQR;
++      if (!qr) {
+         return c.json(
+           {
+             error: 'QR code not available',
+@@ -423,11 +441,29 @@ export class ApiServer {
+       }
+ 
+       return c.json({
+-        qr: this.latestQR,
++        qr,
+         note: 'Scan this QR code in WhatsApp',
+       });
+     });
+ 
++    this.app.post('/session/logout', async (c) => {
++      if (c.req.header('X-OpenWA-Confirm') !== 'unlink') {
++        return c.json({ error: 'Explicit unlink confirmation required' }, 400);
++      }
++      if (!this.isSessionConnected()) {
++        return c.json({ error: 'Session is not connected' }, 409);
++      }
++      if (!this.logoutHandler) {
++        return c.json({ error: 'Logout action is unavailable' }, 503);
++      }
++      try {
++        await this.logoutHandler();
++        return c.json({ status: 'logout_requested' }, 202);
++      } catch (error) {
++        return c.json({ error: error instanceof Error ? error.message : 'Logout failed' }, 502);
++      }
++    });
++
+     this.app.get('/api/events', (c) => {
+       const topicsParam = c.req.query('topics');
+       const topics = topicsParam
+diff --git a/packages/core/src/createClient.ts b/packages/core/src/createClient.ts
+index 2eb5443a3..86861ce1a 100644
+--- a/packages/core/src/createClient.ts
++++ b/packages/core/src/createClient.ts
+@@ -298,6 +298,12 @@ export async function createClient(options: CreateClientOptions): Promise<OpenWA
+ 
+   const getReadinessSnapshot = () => session.getReadinessSnapshot(transport.getOperationalReadinessSnapshot());
+ 
++  // A post-logout navigation can happen long after startup. Keep the public
++  // session state aligned with the browser instead of leaving it at READY.
++  events.on('session.logout', () => {
++    void session.setState('DISCONNECTED', 'whatsapp_logout');
++  });
++
+   const client: OpenWAClient = {
+     sessionId,
+     events,
+diff --git a/packages/core/src/transport/Transport.ts b/packages/core/src/transport/Transport.ts
+index d166f92f2..c7067674d 100644
+--- a/packages/core/src/transport/Transport.ts
++++ b/packages/core/src/transport/Transport.ts
+@@ -2080,6 +2080,22 @@ export class Transport {
+     return this.page;
+   }
+ 
++  /** Read the QR currently shown by WhatsApp Web, including refreshed codes. */
++  async getCurrentQr(): Promise<string | null> {
++    if (!this.page || this.page.isClosed()) return null;
++    return this.page.evaluateScript<string | null>(QR_CHECK_SCRIPT).catch(() => null);
++  }
++
++  /** Ask WhatsApp Web to unlink this browser from the phone. */
++  async logoutLinkedDevice(): Promise<void> {
++    if (!this.page || this.page.isClosed()) throw new Error('WhatsApp browser page is unavailable');
++    await this.page.evaluateScript(`(async () => {
++      const logout = window.require?.('WAWebSocketLogoutUtils')?.sendCurrentLogout;
++      if (typeof logout !== 'function') throw new Error('WhatsApp logout action is unavailable');
++      await logout();
++    })()`);
++  }
++
+   getOperationalReadinessSnapshot(): TransportOperationalReadinessSnapshot {
+     const health = this.injectionController.getHealthSnapshot();
+     const driverActiveGeneration = Boolean(
+diff --git a/packages/wa-automate/src/cli-runtime.ts b/packages/wa-automate/src/cli-runtime.ts
+index 702e9c341..67b2ba4fd 100644
+--- a/packages/wa-automate/src/cli-runtime.ts
++++ b/packages/wa-automate/src/cli-runtime.ts
+@@ -582,6 +582,8 @@ export async function start(parsedArgs: ParsedCliArgs = parseCliArgs()): Promise
+     });
+ 
+     server.setReadinessProvider(() => ({ ...openwaClient.getReadiness(), state: openwaClient.getState() }));
++    server.setQrProvider(() => openwaClient.getTransport().getCurrentQr());
++    server.setLogoutHandler(() => openwaClient.getTransport().logoutLinkedDevice());
+     const detachLaunchNarration = attachLaunchNarration(openwaClient, sink, config.sessionId);
+ 
+     openwaClient.events.on('launch.auth.qr.generated', (event) => {
+diff --git a/packages/wa-automate/src/server/__tests__/middleware.test.ts b/packages/wa-automate/src/server/__tests__/middleware.test.ts
+index e3fd080aa..87ece8a04 100644
+--- a/packages/wa-automate/src/server/__tests__/middleware.test.ts
++++ b/packages/wa-automate/src/server/__tests__/middleware.test.ts
+@@ -108,6 +108,43 @@ describe('Hono Middleware', () => {
+       });
+     });
+ 
++    it('serves the current browser QR and does not reuse a stale cached code', async () => {
++      const config = ConfigSchema.parse({ sessionId: 'test', port: 8013 });
++      const server = new WAServer(config);
++      let currentQr: string | null = 'first-code';
++      let ready = false;
++      server.setQR('stale-code');
++      server.setQrProvider(async () => currentQr);
++      server.setReadinessProvider(() => ({ ready }));
++
++      const readQr = async () => server.getApp().request('/qr');
++      expect(await (await readQr()).json()).toMatchObject({ qr: 'first-code' });
++      currentQr = 'refreshed-code';
++      expect(await (await readQr()).json()).toMatchObject({ qr: 'refreshed-code' });
++      currentQr = null;
++      expect((await readQr()).status).toBe(404);
++      currentQr = 'another-code';
++      ready = true;
++      expect((await readQr()).status).toBe(404);
++    });
++
++    it('requires authentication and explicit confirmation to unlink a session', async () => {
++      const apiKey = 'privacy-first-test-key-32-bytes';
++      const config = ConfigSchema.parse({ sessionId: 'test', host: '0.0.0.0', port: 8014, apiKey });
++      const server = new WAServer(config);
++      const logout = jest.fn(async () => {});
++      server.setReadinessProvider(() => ({ ready: true }));
++      server.setLogoutHandler(logout);
++
++      const request = (headers: Record<string, string>) =>
++        server.getApp().request('/session/logout', { method: 'POST', headers });
++      expect((await request({})).status).toBe(401);
++      expect((await request({ 'X-API-Key': apiKey })).status).toBe(400);
++      expect(logout).not.toHaveBeenCalled();
++      expect((await request({ 'X-API-Key': apiKey, 'X-OpenWA-Confirm': 'unlink' })).status).toBe(202);
++      expect(logout).toHaveBeenCalledOnce();
++    });
++
+     it('refuses a non-loopback bind without an API key', () => {
+       const config = ConfigSchema.parse({
+         sessionId: 'test',
+diff --git a/apps/dashboard-neo/src/routes/pairing.tsx b/apps/dashboard-neo/src/routes/pairing.tsx
+new file mode 100644
+index 000000000..0d08f3811
+--- /dev/null
++++ b/apps/dashboard-neo/src/routes/pairing.tsx
+@@ -0,0 +1,138 @@
++import { createFileRoute } from "@tanstack/react-router"
++import { useCallback, useEffect, useState } from "react"
++import { toDataURL } from "qrcode"
++import { apiFetch, getApiUrl, setApiKey } from "@/lib/api-client"
++
++export const Route = createFileRoute("/pairing")({ component: PairingPage })
++
++type PairingStatus = {
++  connected: boolean
++  ready: boolean
++  state: string
++  qr: string | null
++}
++
++function PairingPage() {
++  const [status, setStatus] = useState<PairingStatus | null>(null)
++  const [qrImage, setQrImage] = useState<string | null>(null)
++  const [error, setError] = useState<string | null>(null)
++  const [loggingOut, setLoggingOut] = useState(false)
++  const [apiKeyInput, setApiKeyInput] = useState("")
++
++  const refresh = useCallback(async () => {
++    try {
++      const base = getApiUrl()
++      const healthResponse = await apiFetch(`${base}/health`, { signal: AbortSignal.timeout(5000) })
++      if (healthResponse.status === 401) throw new Error("API key required")
++      if (!healthResponse.ok) throw new Error(`OpenWA returned HTTP ${healthResponse.status}`)
++      const health = await healthResponse.json() as {
++        connected?: boolean
++        session?: { ready?: boolean; state?: string }
++      }
++      const ready = health.connected === true && health.session?.ready === true
++      let qr: string | null = null
++      if (!ready) {
++        const qrResponse = await apiFetch(`${base}/qr`, { signal: AbortSignal.timeout(5000) })
++        if (qrResponse.ok) qr = (await qrResponse.json() as { qr?: string }).qr ?? null
++      }
++      setStatus({ connected: health.connected === true, ready, state: health.session?.state ?? "UNKNOWN", qr })
++      setError(null)
++    } catch (cause) {
++      setError(cause instanceof Error ? cause.message : "Cannot reach OpenWA")
++    }
++  }, [])
++
++  useEffect(() => {
++    void refresh()
++    const timer = window.setInterval(() => void refresh(), 5000)
++    return () => window.clearInterval(timer)
++  }, [refresh])
++
++  useEffect(() => {
++    let active = true
++    setQrImage(null)
++    if (status?.qr) {
++      void toDataURL(status.qr, { width: 360, margin: 2, errorCorrectionLevel: "M" })
++        .then(image => { if (active) setQrImage(image) })
++        .catch(() => { if (active) setError("Cannot render pairing QR") })
++    }
++    return () => { active = false }
++  }, [status?.qr])
++
++  const logout = async () => {
++    if (!window.confirm("Unlink this OpenWA device from WhatsApp? You will need to scan a new QR code.")) return
++    setLoggingOut(true)
++    setError(null)
++    try {
++      const response = await apiFetch(`${getApiUrl()}/session/logout`, {
++        method: "POST",
++        headers: { "X-OpenWA-Confirm": "unlink" },
++        signal: AbortSignal.timeout(15000),
++      })
++      if (!response.ok) {
++        const body = await response.json().catch(() => ({})) as { error?: string }
++        throw new Error(body.error ?? `Logout failed (HTTP ${response.status})`)
++      }
++      await refresh()
++    } catch (cause) {
++      setError(cause instanceof Error ? cause.message : "Logout failed")
++    } finally {
++      setLoggingOut(false)
++    }
++  }
++
++  return (
++    <div className="mx-auto max-w-lg space-y-5 p-6">
++      <h1 className="text-2xl font-semibold">OpenWA connection</h1>
++      <div className="rounded-xl border bg-card p-6">
++        {error === "API key required" && (
++          <form
++            className="mb-6 space-y-3"
++            onSubmit={(event) => {
++              event.preventDefault()
++              setApiKey(apiKeyInput.trim())
++              setApiKeyInput("")
++              void refresh()
++            }}
++          >
++            <label htmlFor="pairing-api-key" className="block text-sm font-medium">OpenWA API key</label>
++            <input
++              id="pairing-api-key"
++              type="password"
++              autoComplete="off"
++              value={apiKeyInput}
++              onChange={(event) => setApiKeyInput(event.target.value)}
++              className="w-full rounded-md border bg-background px-3 py-2"
++            />
++            <button type="submit" disabled={!apiKeyInput.trim()} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">
++              Connect
++            </button>
++          </form>
++        )}
++        <p className="text-lg font-medium">
++          {status?.ready ? "Connected and ready" : status ? "Not connected" : error === "API key required" ? "Sign in to view connection" : "Checking connection…"}
++        </p>
++        <p className="mt-1 text-sm text-muted-foreground">Session: {status?.state ?? "checking"}</p>
++        {status?.ready ? (
++          <button
++            type="button"
++            onClick={() => void logout()}
++            disabled={loggingOut}
++            className="mt-6 rounded-md border border-destructive px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
++          >
++            {loggingOut ? "Logging out…" : "Log out and unlink phone"}
++          </button>
++        ) : qrImage ? (
++          <div className="mt-6 space-y-3">
++            <p className="text-sm">WhatsApp on your phone → Linked devices → Link a device</p>
++            <img src={qrImage} alt="Current OpenWA pairing QR" className="w-full max-w-sm rounded-md bg-white p-3" />
++            <p className="text-xs text-muted-foreground">The code refreshes automatically when WhatsApp changes it.</p>
++          </div>
++        ) : (
++          <p className="mt-6 text-sm text-muted-foreground">Waiting for a pairing code…</p>
++        )}
++      </div>
++      {error && error !== "API key required" && <p role="alert" className="text-sm text-destructive">{error}</p>}
++    </div>
++  )
++}

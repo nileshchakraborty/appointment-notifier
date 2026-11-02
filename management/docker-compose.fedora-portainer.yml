@@ -1,0 +1,13 @@
+name: portainer-server
+
+services:
+  portainer:
+    image: portainer/portainer-ce:2.39.5
+    container_name: portainer-server
+    restart: unless-stopped
+    environment:
+      AGENT_SECRET: "${PORTAINER_AGENT_SECRET:?PORTAINER_AGENT_SECRET is required}"
+    ports:
+      - "192.168.1.250:9000:9000"
+    volumes:
+      - /home/nilesh/portainer-server/portainer-data:/data:Z

@@ -1,0 +1,3 @@
+services:
+  openwa:
+    image: local/openwa-fedora:upstream-5293a24

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Fedora USB Ethernet adapter after boot and periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=5min
+Unit=fedora-ethernet-recover.service
+
+[Install]
+WantedBy=timers.target

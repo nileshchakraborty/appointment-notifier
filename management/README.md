@@ -2,7 +2,8 @@
 
 - `http://rpi.local/`, `http://rpi.home.arpa/`, or `http://dashboard.rpi.home.arpa/` — local quick-links dashboard
 - `http://portainer.rpi.home.arpa/` — Portainer Docker management
-- `http://openwa.rpi.home.arpa/` — OpenWA
+- `http://openwa.rpi.home.arpa/dashboard/pairing` — OpenWA connection status, live pairing QR, and logout
+- `http://192.168.1.229:8081/dashboard/pairing` — direct OpenWA pairing link when the client is not using Pi-hole DNS
 - `http://pihole.rpi.home.arpa/` — Pi-hole
 - `http://streambert-tv.rpi.home.arpa/` — Streambert TV
 - `http://rpi.local/firestick/streambert.apk` — Streambert Fire TV installer
@@ -86,6 +87,12 @@ these services and verify application state before declaring success.
    connectivity, Kafka, worker count, and actual alert delivery.
 
 ### OpenWA onboarding dialog after QR pairing
+
+The OpenWA dashboard's Pairing page now reads `/qr` from the live browser and
+refreshes every five seconds. The API key or configured dashboard authentication
+is required to read the QR or request logout. The logout button explicitly
+unlinks the WhatsApp device and requires confirmation. The former Mac-only
+`127.0.0.1:8765` pairing helper is no longer needed for normal pairing.
 
 On 2026-10-31, two freshly paired sessions reached `ready` but navigated to
 `?post_logout=1` around five minutes later; the phone also removed the linked
