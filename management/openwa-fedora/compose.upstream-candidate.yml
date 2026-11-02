@@ -2,5 +2,5 @@ services:
   openwa:
     build:
       args:
-        OPENWA_COMMIT: 1cb0b49bde8c799b85e1a185d68620bc15f22f52
-    image: local/openwa-fedora:upstream-1cb0b49
+        OPENWA_COMMIT: aa6d256f14a827bc004fe231c78c8707fde70e7e
+    image: local/openwa-fedora:upstream-aa6d256
